@@ -11,7 +11,6 @@ from src.preprocessing import (
     remove_special_characters,
     normalize_spaces,
     clean_text,
-    tokenize_text,
     preprocessing,
 )
 
@@ -374,23 +373,6 @@ def test_clean_text_multiple_subreddit_links():
     result = clean_text(text)
     assert "datascience" in result
     assert "machinelearning" in result
-
-
-# ============================================================
-# PRUEBAS — tokenize_text
-# ============================================================
-
-def test_tokenize_basic():
-    assert tokenize_text("hello world") == ["hello", "world"]
-
-def test_tokenize_single_word():
-    assert tokenize_text("hello") == ["hello"]
-
-@pytest.mark.xfail(reason="split(' ') en string vacío devuelve [''] — mete ruido en features downstream")
-def test_tokenize_empty_string_should_return_empty_list():
-    """Para un clasificador, un string vacío no tiene tokens. Debería devolver []."""
-    assert tokenize_text("") == []
-
 
 # ============================================================
 # PRUEBAS — preprocessing (DataFrame level)

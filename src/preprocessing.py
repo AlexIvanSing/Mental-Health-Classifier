@@ -112,24 +112,6 @@ def clean_text(text: str) -> str:
 # posible de aplicar en futuro
 #def remove_stop_words(sentence:str) -> list:
 #    return
-def tokenize_text(sentence: str) -> list:
-    """
-    Tokenize a sentence by splitting on whitespace.
-
-    Parameters
-    ----------
-    sentence : str
-        Cleaned input sentence.
-
-    Returns
-    -------
-    list of str
-        List of whitespace-separated tokens. Empty list if input is falsy.
-    """
-    if not sentence:
-        return []
-    return sentence.split(" ")
-
 
 def preprocessing(df: pd.DataFrame, text_column: str) -> pd.DataFrame:
     """
