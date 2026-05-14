@@ -1,7 +1,21 @@
-
 data:
   train_path: "data/train.csv"
   test_path: "data/test.csv"
+  expected_columns:
+    - "user_id"
+    - "text_id"
+    - "title"
+    - "text"
+    - "is_suicide"
+  text_columns:
+    - "title"
+    - "text"
+  target_column: "is_suicide"
+  value_true: "yes"
+  value_false: "no"
+
+paths:
+  model_output: "models/model.joblib"
 
 vectorizer:
   ngram_range: [1, 2]
@@ -14,13 +28,11 @@ model:
   n_estimators: 500
   max_depth: 6
   learning_rate: 0.05
-  early_stopping_rounds: 30
   eval_metric: "auc"
   random_state: 42
   scale_pos_weight: 0.93
 
-
 training:
   test_size: 0.2
   random_state: 42
-  n_folds: 5
+  n_splits: 5
