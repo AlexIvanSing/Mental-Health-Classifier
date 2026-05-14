@@ -47,6 +47,6 @@ Thumbs.db
 logs/
 
 models/*
-notebooks/*
+
 
 reports/*
