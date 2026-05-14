@@ -40,10 +40,13 @@ def handle_missing_data(df: pd.DataFrame, columns: list = None, strategy: str = 
     return df
 
 def concatenate_df(df: pd.DataFrame, columns: list):
+    """Concatenate multiple text columns into a single space-separated column."""
+
     df = handle_missing_data(df, columns=columns, strategy="empty_string")
     
     new_col_name = "_".join(columns) 
     df[new_col_name] = df[columns].astype(str).agg(" ".join, axis=1)
+
     
     return df
 
@@ -72,10 +75,10 @@ def ingestion(
         Processed dataframe ready for preprocessing.
     """
 
-    if not schema_validation(data_url, expected_columns):
-        raise ValueError("Dataset schema is not valid.")
+    #if not schema_validation(data_url, expected_columns):
+    #    raise ValueError("Dataset schema is not valid.")
 
-    df = data_loader(data_url)
+    df = data_loader(data_url,expected_columns )
 
     df = handle_missing_data(df)
 

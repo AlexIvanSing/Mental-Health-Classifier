@@ -1,30 +1,6 @@
 import re
 from ftfy import fix_text
-
-def normalize_quotes(text):
-    if not isinstance(text, str):
-        return text
-
-    replacements = {
-        "’": "'",
-        "‘": "'",
-        "`": "'",
-        "´": "'",
-        "“": '"',
-        "”": '"',
-        "„": '"',
-        "«": '"',
-        "»": '"'
-    }
-
-    for bad, good in replacements.items():
-        text = text.replace(bad, good)
-
-    return text
-
-import re
-from ftfy import fix_text
-
+import pandas as pd
 
 def normalize_quotes(text: str) -> str:
     """Normalize quotation marks and apostrophes."""
@@ -65,20 +41,19 @@ def remove_urls(text: str) -> str:
 def remove_mentions(text: str) -> str:
     """Remove user mentions from text."""
 
-    return re.sub(r'@\w+', ' ', text)
+    return re.sub(r'@\w+|u/\w+', ' ', text)
 
 
 def normalize_hashtags(text: str) -> str:
     """Remove hashtag symbols while preserving the word."""
 
-    return re.sub(r'#(\w+)', r'\1', text)
+    return re.sub(r'#\s*(\w+)', r'\1', text)
 
 
 def remove_emojis(text: str) -> str:
-    """Remove emojis and supplementary Unicode symbols."""
-
-    return re.sub(r'[\U00010000-\U0010ffff]', ' ', text)
-
+    text = re.sub(r'[\U00010000-\U0010ffff]', ' ', text)
+    text = re.sub(r'[:;=][\'\-]?[)(D/\\|PpOo]', ' ', text)
+    return text
 
 def remove_special_characters(text: str) -> str:
     """Remove unsupported special characters."""
@@ -133,6 +108,23 @@ def clean_text(text: str) -> str:
     text = normalize_spaces(text)
 
     return text
-
+# posible de aplicar en futuro
+#def remove_stop_words(sentence:str) -> list:
+#    return
 def tokenize_text(sentence: str) -> list:
+    if not sentence:
+        return []
+    return sentence.split(" ")
     
+def preprocessing(df: pd.DataFrame, text_column: str) -> pd.DataFrame:
+    try:
+        # limpiar text
+        df[text_column] = df[text_column].apply(clean_text)
+        relevant_columns = [text_column, "tokenized"]
+        newcolumn = "_".join(relevant_columns)
+        # tokenizar text
+        df[newcolumn] = df[text_column].apply(tokenize_text)
+        return df
+    except:
+        print("dataframe unable to preprocess")
+        return None

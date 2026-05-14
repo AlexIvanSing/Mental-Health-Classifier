@@ -26,10 +26,10 @@ dev = [
 [project.scripts]
 train = "src.training:main" ## ejemplos
 infer = "src.inference:main"
-test = "pytest"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-v"
 
 [tool.setuptools.packages.find]
 where = ["."]

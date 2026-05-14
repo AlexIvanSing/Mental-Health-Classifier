@@ -59,6 +59,6 @@ def test_concatenate_df(temp_csv):
     cols_to_join = ["nombre", "apellido"]
     df = concatenate_df(df, cols_to_join)
     
-    assert "nombreapellido" in df.columns
-    assert df["nombreapellido"].iloc[0] == "AnaPerez"
-    assert df["nombreapellido"].iloc[2] == "CrisSanz"
+    assert "nombre_apellido" in df.columns
+    assert df["nombre_apellido"].iloc[0] == "Ana Perez"
+    assert df["nombre_apellido"].iloc[2] == "Cris Sanz"
