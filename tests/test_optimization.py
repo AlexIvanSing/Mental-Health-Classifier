@@ -14,9 +14,14 @@ import pandas as pd
 import pytest
 import yaml
 
+import json
+import os
+
 from src.optimization import (
     VARIANTS,
     optimize_vectorizer,
+    optimize_xgb,
+    pick_winner_variant,
     run_all_optimizations,
 )
 
@@ -166,3 +171,142 @@ def test_run_all_optimizations_default_covers_all_four_variants(tiny_config_file
     """We don't actually run all four (slow). Just confirm VARIANTS is the default."""
     from src.optimization import VARIANTS
     assert VARIANTS == ("base", "stopwords_nltk", "stopwords_domain", "stemming")
+
+
+# ============================================================================
+# optimize_xgb
+# ============================================================================
+
+EXPECTED_XGB_KEYS = {
+    "variant", "best_cv_auc", "best_params", "n_trials",
+    "n_trials_this_run", "all_trial_scores", "storage_path",
+}
+
+EXPECTED_XGB_PARAM_KEYS = {
+    "n_estimators", "max_depth", "learning_rate",
+    "subsample", "colsample_bytree", "gamma",
+    "min_child_weight", "reg_alpha", "reg_lambda",
+}
+
+
+def test_optimize_xgb_returns_expected_top_level_keys(tiny_config_file, tmp_path):
+    storage = str(tmp_path / "xgb.journal")
+    result = optimize_xgb("base", tiny_config_file, n_trials=1, storage_path=storage)
+    assert isinstance(result, dict)
+    assert EXPECTED_XGB_KEYS.issubset(result.keys())
+
+
+def test_optimize_xgb_best_params_have_correct_shape(tiny_config_file, tmp_path):
+    storage = str(tmp_path / "xgb.journal")
+    result = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage)
+    params = result["best_params"]
+    assert EXPECTED_XGB_PARAM_KEYS == set(params.keys())
+
+    assert isinstance(params["n_estimators"], int)
+    assert isinstance(params["max_depth"], int)
+    assert isinstance(params["learning_rate"], float)
+    assert isinstance(params["subsample"], float)
+    assert isinstance(params["colsample_bytree"], float)
+    assert isinstance(params["gamma"], float)
+    assert isinstance(params["min_child_weight"], int)
+    assert isinstance(params["reg_alpha"], float)
+    assert isinstance(params["reg_lambda"], float)
+
+
+def test_optimize_xgb_best_params_within_search_space(tiny_config_file, tmp_path):
+    storage = str(tmp_path / "xgb.journal")
+    result = optimize_xgb("base", tiny_config_file, n_trials=3, storage_path=storage)
+    p = result["best_params"]
+    assert 100 <= p["n_estimators"] <= 1500
+    assert 3 <= p["max_depth"] <= 10
+    assert 0.005 <= p["learning_rate"] <= 0.3
+    assert 0.6 <= p["subsample"] <= 1.0
+    assert 0.6 <= p["colsample_bytree"] <= 1.0
+    assert 0.0 <= p["gamma"] <= 5.0
+    assert 1 <= p["min_child_weight"] <= 10
+    assert 1e-8 <= p["reg_alpha"] <= 10.0
+    assert 1e-8 <= p["reg_lambda"] <= 10.0
+
+
+def test_optimize_xgb_cv_auc_is_in_unit_interval(tiny_config_file, tmp_path):
+    storage = str(tmp_path / "xgb.journal")
+    result = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage)
+    assert 0.0 <= result["best_cv_auc"] <= 1.0
+
+
+def test_optimize_xgb_rejects_unknown_variant(tiny_config_file, tmp_path):
+    import pytest
+    storage = str(tmp_path / "xgb.journal")
+    with pytest.raises(ValueError, match="Unknown variant"):
+        optimize_xgb("bogus", tiny_config_file, n_trials=1, storage_path=storage)
+
+
+def test_optimize_xgb_checkpoint_persists_across_calls(tiny_config_file, tmp_path):
+    """
+    Two sequential calls with resume=True must produce a study that has
+    n_trials_call_1 + n_trials_call_2 completed trials total.
+    """
+    storage = str(tmp_path / "xgb.journal")
+
+    r1 = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage)
+    assert r1["n_trials"] >= 2  # at least 2 completed in study so far
+
+    r2 = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage, resume=True)
+    # Cumulative count should be at least the first call's count + 2 new trials
+    assert r2["n_trials"] >= r1["n_trials"] + 1  # >= because some trials may fail and not count
+
+
+def test_optimize_xgb_no_resume_starts_fresh(tiny_config_file, tmp_path):
+    storage = str(tmp_path / "xgb.journal")
+
+    r1 = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage)
+    n_after_first = r1["n_trials"]
+
+    r2 = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage, resume=False)
+    # After --no-resume, the journal is wiped — so the second call's trial
+    # count must be <= n_trials_this_run, not cumulative.
+    assert r2["n_trials"] <= 2
+    assert r2["n_trials"] <= n_after_first  # strictly less or equal to the cumulative
+
+
+# ============================================================================
+# pick_winner_variant
+# ============================================================================
+
+def test_pick_winner_variant_returns_top_test_auc(tmp_path):
+    path = tmp_path / "results.json"
+    fake = {
+        "base":             {"test": {"AUC": 0.71}},
+        "stopwords_nltk":   {"test": {"AUC": 0.73}},
+        "stopwords_domain": {"test": {"AUC": 0.69}},
+        "stemming":         {"test": {"AUC": 0.74}},
+    }
+    path.write_text(json.dumps(fake))
+    assert pick_winner_variant(str(path)) == "stemming"
+
+
+def test_pick_winner_variant_ignores_xgb_optimization_key(tmp_path):
+    """`xgb_optimization` is a sibling key (set by stage 2) that must NOT be
+    considered when picking the winner from stage 1 results."""
+    path = tmp_path / "results.json"
+    fake = {
+        "base":             {"test": {"AUC": 0.78}},
+        "stopwords_nltk":   {"test": {"AUC": 0.70}},
+        "xgb_optimization": {"variant": "base", "test": {"AUC": 0.99}},  # decoy
+    }
+    path.write_text(json.dumps(fake))
+    assert pick_winner_variant(str(path)) == "base"
+
+
+def test_pick_winner_variant_file_not_found(tmp_path):
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        pick_winner_variant(str(tmp_path / "nonexistent.json"))
+
+
+def test_pick_winner_variant_empty_results(tmp_path):
+    import pytest
+    path = tmp_path / "results.json"
+    path.write_text(json.dumps({}))
+    with pytest.raises(ValueError):
+        pick_winner_variant(str(path))

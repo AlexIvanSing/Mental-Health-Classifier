@@ -1,6 +1,6 @@
 # Mental Health Classifier — Suicide Ideation Detection
 
-> Binary text classifier that flags suicide-related ideation in social media posts (Reddit-style title + body), built on a reproducible scikit-learn pipeline with XGBoost. End-to-end CLI for training, evaluation against a labeled test fold, and blind inference — every run drops metrics, plots and a self-contained markdown report into `reports/`.
+> Binary text classifier that flags suicide-related ideation in Reddit-style posts (title + body), built on a reproducible scikit-learn pipeline with XGBoost. End-to-end CLI for training, evaluation against a labeled test fold, and blind inference — plus two-stage Optuna optimization (TF-IDF + XGBoost), checkpointable studies, and auto-generated markdown reports.
 
 ---
 
@@ -8,13 +8,17 @@
 
 This repository implements an end-to-end machine learning pipeline for the binary classification task **`is_suicide ∈ {0, 1}`** on user-generated text. The system is designed to be:
 
-- **Reproducible** — every hyperparameter, path and split lives in `configs/default.yaml`. No magic numbers in code.
-- **Modular** — ingestion, preprocessing, vectorization, model, evaluation and reporting are independent modules, each unit-tested in isolation.
-- **CLI-driven** — three subcommands cover the lifecycle: `train`, `evaluate`, `predict`.
-- **Train/serve consistent** — text cleaning lives *inside* the sklearn `Pipeline`, so the exact same preprocessing runs at training time and at inference time. No skew.
-- **Self-documenting runs** — every `train` and `evaluate` invocation writes JSON metrics + ROC PNG + confusion-matrix PNG + a `*.md` report into `reports/`. The reports embed the plots and the metric table, ready to hand in.
+- **Reproducible** — every hyperparameter, path and split lives in YAML configs under `configs/`. No magic numbers in code.
+- **Modular** — ingestion, preprocessing, vectorization, model, evaluation, reporting and optimization are independent modules, each unit-tested in isolation.
+- **Configurable preprocessing** — four interchangeable text-cleaning variants (`base`, `stopwords_nltk`, `stopwords_domain`, `stemming`) selected via the YAML config. Each can be A/B-tested against the others.
+- **Two-stage tuning with Optuna** — first the TF-IDF hyperparameters are tuned independently per variant; then the XGBoost hyperparameters are tuned on the winning variant. Studies persist to disk so a killed process resumes where it left off.
+- **CLI-driven** — three subcommands cover the day-to-day lifecycle (`train`, `evaluate`, `predict`); two orchestration scripts cover the optimization lifecycle.
+- **Train/serve consistent** — text cleaning lives *inside* the sklearn `Pipeline` as a picklable `FunctionTransformer`, so the exact same preprocessing runs at training time and at inference time. No skew, regardless of variant.
+- **Self-documenting runs** — every training and evaluation invocation drops JSON metrics + ROC PNG + confusion-matrix PNG + a `*.md` report into a variant-specific folder under `reports/`. Optimization runs also produce a comparison report.
 
 The repository is academic in scope (TC3002B, Tecnológico de Monterrey) but follows the structural conventions of a production ML codebase.
+
+**Team:** Aislinn Ruiz Sandoval · Iván Alexander Ramos Ramírez · Miguel Ángel Galicia Sánchez · Víctor Alejandro Morales García.
 
 ---
 
@@ -22,44 +26,45 @@ The repository is academic in scope (TC3002B, Tecnológico de Monterrey) but fol
 
 ```
             ┌─────────────────────────────────────────────────────────┐
-            │                  configs/default.yaml                    │
+            │            configs/<variant>.yaml + Optuna              │
             └─────────────────────────────────────────────────────────┘
                                        │
-        ┌──────────────────────────────┼──────────────────────────────┐
-        ▼                              ▼                              ▼
-   TRAIN FLOW                    EVALUATE FLOW                  PREDICT FLOW
-   (labeled train.csv)           (labeled test.csv)             (unlabeled csv)
-        │                              │                              │
-        ▼                              ▼                              ▼
-   ingestion() ─► clean_text       ingestion() ─► clean_text       ingestion()
-        │                              │                              │
-        ▼                              ▼                              ▼
-   build_pipeline(config)          load_pipeline()                load_pipeline()
-   ┌────────────────────┐               │                              │
-   │ FunctionTransformer│               │                              │
-   │   _clean_series    │               ▼                              ▼
-   │      ↓             │          predict + predict_proba        predict + predict_proba
-   │ TfidfVectorizer    │               │                              │
-   │      ↓             │               ▼                              ▼
-   │ XGBClassifier      │          evaluation.evaluate           write CSV
-   └────────────────────┘          + generate_report             (text_id,
-        │                              │                          prediction,
-        ▼                              ▼                          probability)
-   StratifiedKFold CV +            reports/
-   train_test_split fit            ├─ roc_curve_test.png
-        │                          ├─ confusion_matrix_test.png
-        ▼                          ├─ test_metrics.json
-   joblib.dump → models/           └─ final_evaluation.md
-        │
-        ▼
-   evaluation.evaluate
-   + generate_report
-        │
-        ▼
-   reports/
-   ├─ roc_curve_val.png
-   ├─ confusion_matrix_val.png
-   ├─ training_metrics.json
+        ┌──────────────────┬───────────┴───────────┬──────────────────┐
+        ▼                  ▼                       ▼                  ▼
+   TRAIN FLOW         EVALUATE FLOW          PREDICT FLOW       OPTIMIZATION FLOW
+   (labeled)          (labeled test)         (unlabeled csv)    (Optuna)
+        │                  │                       │                  │
+        ▼                  ▼                       ▼                  ▼
+   ingestion()        ingestion()             ingestion()        Stage 1: TF-IDF
+        │                  │                       │              ──────────────
+        ▼                  ▼                       ▼              For each of 4
+   build_pipeline       load_pipeline()         load_pipeline()   variants:
+   ┌──────────────┐         │                       │             optimize_vectorizer
+   │ Cleaner      │         │                       │              → 30 trials
+   │  (variant-   │         ▼                       ▼              → 5-fold CV AUC
+   │   specific)  │   predict + predict_proba  predict + proba    → writes best
+   │      ↓       │         │                       │                hyperparams to
+   │ TfidfVect    │         ▼                       ▼                its YAML
+   │      ↓       │   evaluation.evaluate     write CSV            
+   │ XGBClassifier│   + generate_report        (text_id,           Stage 2: XGB
+   └──────────────┘         │                  prediction,         ──────────────
+        │                   │                  probability)        pick_winner_variant()
+        ▼                   ▼                                      → load winner YAML
+   StratifiedKFold     reports/<variant>/                          optimize_xgb
+   CV + holdout fit    ├─ roc_curve_test.png                        → 30 trials
+        │              ├─ confusion_matrix_test.png                 → JournalStorage
+        ▼              ├─ test_metrics.json                           checkpoint
+   joblib.dump         └─ final_evaluation.md                       → progress per
+        │                                                             trial printed
+        ▼                                                           → writes best XGB
+   evaluation.evaluate                                                hyperparams to
+   + generate_report                                                  winner's YAML
+        │                                                              + early stopping
+        ▼                                                            
+   reports/<variant>/                                              Final train+evaluate
+   ├─ roc_curve_val.png                                            on tuned pipeline,
+   ├─ confusion_matrix_val.png                                     reports/optimization.md
+   ├─ training_metrics.json                                        renders the comparison.
    └─ training_report.md
 ```
 
@@ -70,46 +75,46 @@ The repository is academic in scope (TC3002B, Tecnológico de Monterrey) but fol
 ```
 Suicide_classifier/
 ├── configs/
-│   └── default.yaml             # Single source of truth for hyperparams & paths
+│   ├── default.yaml                       # Baseline variant (preprocessing.variant: "base")
+│   ├── variant_stopwords_nltk.yaml        # NLTK stopwords (negations preserved)
+│   ├── variant_stopwords_domain.yaml      # Curated grammar-only stopword list
+│   └── variant_stemming.yaml              # Porter stemmer
 ├── data/
-│   ├── data_train.csv           # Training split  (1,516 rows)
-│   └── data_test_fold1.csv      # Held-out test   (252 rows)
-├── models/                      # Trained .joblib artifacts (populated by train)
+│   ├── data_train.csv                     # Training split (1,516 rows)
+│   └── data_test_fold1.csv                # Held-out test fold (252 rows)
+├── models/                                # Trained .joblib artifacts (one per variant)
 ├── notebooks/
-│   ├── EDA.ipynb                # Exploratory data analysis
-│   └── pipeline_test.ipynb      # Pipeline smoke tests
-├── reports/                     # Auto-populated by train & evaluate
-│   ├── roc_curve_val.png
-│   ├── confusion_matrix_val.png
-│   ├── training_metrics.json
-│   ├── training_report.md
-│   ├── roc_curve_test.png
-│   ├── confusion_matrix_test.png
-│   ├── test_metrics.json
-│   └── final_evaluation.md
+│   ├── EDA.ipynb                          # Exploratory data analysis
+│   └── pipeline_test.ipynb                # Pipeline smoke tests
+├── reports/                               # Auto-populated by train/evaluate/optimization
+│   ├── <variant>/                         # One subfolder per variant after training
+│   │   ├─ roc_curve_{val,test}.png
+│   │   ├─ confusion_matrix_{val,test}.png
+│   │   ├─ {training,test}_metrics.json
+│   │   ├─ training_report.md
+│   │   └─ final_evaluation.md
+│   ├── optimization_results.json          # Consolidated Optuna results (both stages)
+│   ├── optimization.md                    # Auto-rendered comparison report
+│   └── optuna_xgb_<winner>.journal        # XGB study checkpoint
+├── scripts/
+│   ├── run_optimization_pipeline.py       # Stage 1: tune TF-IDF on all 4 variants
+│   ├── run_xgb_optimization.py            # Stage 2: tune XGB on the winning variant
+│   └── generate_optimization_report.py    # Render reports/optimization.md
 ├── src/
-│   ├── __main__.py              # CLI dispatcher: python -m src {train|evaluate|predict}
-│   ├── data_ingestion.py        # Schema validation, loading, NA handling, label mapping, split
-│   ├── preprocessing.py         # Text cleaning (encoding, URLs, mentions, hashtags, emojis, …)
-│   ├── vectorizer.py            # TfidfVectorizer factory
-│   ├── model.py                 # XGBClassifier factory
-│   ├── pipeline.py              # sklearn Pipeline assembly (cleaner → tfidf → clf)
-│   ├── training.py              # train() + train_pipeline() orchestrator
-│   ├── inference.py             # run_inference() + CLI wrapper (blind prediction)
-│   ├── evaluate_cli.py          # run_evaluation() + CLI wrapper (labeled scoring)
-│   ├── evaluation.py            # compute_metrics, plots, evaluate, generate_report
-│   └── utils.py                 # YAML loader
-├── tests/
-│   ├── conftest.py              # Shared fixtures (pipeline, model on disk, configs)
-│   ├── test_data_ingestion.py
-│   ├── test_preprocessing.py
-│   ├── test_vectorizer.py
-│   ├── test_model.py
-│   ├── test_pipeline.py
-│   ├── test_evaluation.py
-│   ├── test_inference.py
-│   └── test_evaluate_cli.py
-└── pyproject.toml               # Package metadata, dependencies, console scripts
+│   ├── __main__.py                        # CLI: python -m src {train|evaluate|predict}
+│   ├── data_ingestion.py                  # Schema validation, loading, NA handling, label mapping
+│   ├── preprocessing.py                   # clean_text + 3 variants (stopwords_nltk, _domain, stemming)
+│   ├── vectorizer.py                      # TfidfVectorizer factory
+│   ├── model.py                           # XGBClassifier factory (9-param config)
+│   ├── pipeline.py                        # sklearn Pipeline assembly + CLEANERS registry
+│   ├── training.py                        # train() + train_pipeline() orchestrator
+│   ├── inference.py                       # run_inference() + CLI wrapper (blind prediction)
+│   ├── evaluate_cli.py                    # run_evaluation() + CLI wrapper (labeled scoring)
+│   ├── evaluation.py                      # compute_metrics, plots, evaluate, generate_report
+│   ├── optimization.py                    # optimize_vectorizer + optimize_xgb + pick_winner_variant
+│   └── utils.py                           # YAML loader
+├── tests/                                 # pytest suite (one file per src module)
+└── pyproject.toml
 ```
 
 ---
@@ -119,69 +124,96 @@ Suicide_classifier/
 | Module | Public API | Purpose |
 |---|---|---|
 | `data_ingestion` | `ingestion`, `split_dataset`, `schema_validation`, `data_loader`, `data_mapping`, `handle_missing_data`, `concatenate_df` | Load CSV, validate schema, resolve nulls, concatenate text columns, map labels, stratified train/test split. |
-| `preprocessing` | `clean_text`, `tokenize_text`, `preprocessing` | Repair encoding, strip URLs / mentions / hashtags / emojis / special chars, lowercase, normalize whitespace. |
-| `vectorizer` | `build_vectorizer` | Build a config-driven `TfidfVectorizer` (sublinear TF, n-grams 1–2, `min_df`/`max_df` caps). |
-| `model` | `build_model` | Build a config-driven `XGBClassifier` with `scale_pos_weight` for class imbalance. |
-| `pipeline` | `build_pipeline` | Assemble `cleaner → tfidf → xgboost` into a single sklearn `Pipeline`. |
-| `training` | `train`, `train_pipeline`, `main` | Stratified 80/20 split, 5-fold Stratified CV (AUC), final fit, holdout evaluation, persist to `models/` + `reports/`. |
-| `inference` | `run_inference`, `run_inference_cli`, `load_pipeline`, `predict` | **Blind** prediction: load model, preprocess input CSV, write predictions CSV. No labels required. |
-| `evaluate_cli` | `run_evaluation`, `run_evaluation_cli` | **Scored** prediction: same as inference but requires ground-truth labels, computes full metrics, writes plots + JSON + markdown report. |
-| `evaluation` | `compute_metrics`, `plot_roc_curve`, `plot_confusion_matrix`, `evaluate`, `generate_report` | TP/TN/FP/FN, TPR, FPR, AUC, precision, recall, F1; ROC and confusion-matrix PNGs; markdown report with embedded plots. |
+| `preprocessing` | `clean_text`, `clean_text_with_stopwords_nltk`, `clean_text_with_stopwords_domain`, `clean_text_with_stemming`, `tokenize_text`, `preprocessing` | Baseline cleaner + three variants. Negations always preserved across all variants. |
+| `vectorizer` | `build_vectorizer` | Config-driven `TfidfVectorizer`. |
+| `model` | `build_model` | Config-driven `XGBClassifier`. Supports the full 9-hyperparameter space (`n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`, `gamma`, `min_child_weight`, `reg_alpha`, `reg_lambda`) plus `scale_pos_weight` and `eval_metric`. |
+| `pipeline` | `build_pipeline`, `CLEANERS` | Assemble `cleaner → tfidf → xgboost` Pipeline. Cleaner picked from `CLEANERS` registry via `config["preprocessing"]["variant"]`. |
+| `training` | `train`, `train_pipeline`, `main` | Stratified 80/20 split + 5-fold Stratified CV (AUC) + final fit. **Early stopping** activated when `config["model"]["early_stopping_rounds"]` is present: refits the XGB step with an inner 90/10 eval_set so trees stop growing once validation AUC plateaus. |
+| `inference` | `run_inference`, `run_inference_cli`, `load_pipeline`, `predict` | **Blind** prediction (no ground truth required). |
+| `evaluate_cli` | `run_evaluation`, `run_evaluation_cli` | **Scored** prediction: requires ground-truth labels, computes full metrics, writes plots + JSON + markdown. |
+| `evaluation` | `compute_metrics`, `plot_roc_curve`, `plot_confusion_matrix`, `evaluate`, `generate_report` | TP/TN/FP/FN, TPR, FPR, AUC, precision, recall, F1; ROC and confusion-matrix PNGs; self-contained markdown report. |
+| `optimization` | `optimize_vectorizer`, `optimize_xgb`, `pick_winner_variant`, `run_all_optimizations` | Two-stage Optuna search. Stage 1 tunes the 5-param TF-IDF space per variant. Stage 2 tunes the 9-param XGB space on the winning variant with `JournalStorage` checkpointing. |
 | `utils` | `load_config` | Parse a YAML config file into a dict. |
 
-> **Two distinct "pipelines"** — `pipeline.build_pipeline()` returns the **sklearn Pipeline** (the model object that gets serialized). `training.train_pipeline()` is the **workflow orchestrator** (config → data → train → evaluate → save). The first lives inside the second.
+> **Two distinct "pipelines"** — `pipeline.build_pipeline()` returns the **sklearn Pipeline** (the serializable model object). `training.train_pipeline()` is the **workflow orchestrator**. The first lives inside the second.
 >
-> **`predict` vs `evaluate`** — `predict` is for *unlabeled* data: it only emits `text_id, prediction, probability`. `evaluate` is for *labeled* data (e.g., the held-out test fold): it computes the full metrics dict against ground truth and dumps a markdown report.
+> **`predict` vs `evaluate`** — `predict` is for *unlabeled* data: emits `text_id, prediction, probability`. `evaluate` is for *labeled* data: computes the full metrics dict against ground truth and dumps a markdown report.
+
+---
+
+## Preprocessing variants
+
+The four cleaners are selected via `config["preprocessing"]["variant"]`:
+
+| Variant | What it does | Rationale |
+|---|---|---|
+| `base` | Encoding repair + URL/mention/hashtag/emoji/special-char removal + lowercase + whitespace normalization. | Minimal-loss baseline. Relies on `max_df=0.95` to filter corpus-wide stopwords implicitly. |
+| `stopwords_nltk` | `base` + remove NLTK English stopwords **except** negations (`no`, `not`, `never`, `nor`, `neither`, `without`, `nothing`, `nobody`, `nowhere`, `none`). | Standard stopword filtering with a critical exception: negations flip polarity in suicide-ideation text and must be preserved. |
+| `stopwords_domain` | `base` + remove a hand-curated list of **only** purely grammatical tokens (articles, prepositions, conjunctions, non-negated auxiliaries). Emotional content explicitly kept. | More conservative than NLTK: never drops tokens like "alone", "die", "hopeless" that generic lists sometimes include. |
+| `stemming` | `base` + Porter stemming token-by-token. | Collapses morphological variants (`die`/`died`/`dying` → `die`) to reduce vocabulary in a small-corpus setting. |
+
+All variants are exposed in `src.pipeline.CLEANERS`; adding a new one is a one-line registry entry.
 
 ---
 
 ## Configuration
 
-All runtime parameters live in `configs/default.yaml`:
+Every runtime parameter lives in YAML. Each variant has its own config; they share schema but differ in `preprocessing.variant`, `paths.*` and the post-Optuna `vectorizer`/`model` blocks.
 
 ```yaml
 data:
-  train_path: "data/data_train.csv"          # Training CSV
-  test_path:  "data/data_test_fold1.csv"     # Held-out test CSV
+  train_path: "data/data_train.csv"
+  test_path:  "data/data_test_fold1.csv"
   expected_columns: [user_id, text_id, title, text, is_suicide]
-  text_columns:     [title, text]            # Concatenated into "title_text"
+  text_columns:     [title, text]
   target_column:    "is_suicide"
-  value_true:       "yes"                    # Label mapped → 1
-  value_false:      "no"                     # Label mapped → 0
+  value_true:       "yes"
+  value_false:      "no"
+
+preprocessing:
+  variant: "base"                         # base | stopwords_nltk | stopwords_domain | stemming
 
 paths:
-  model_output:        "models/model.joblib"          # Where the trained pipeline is dumped
-  reports_dir:         "reports"                      # Auto-created by train/evaluate
-  # Train-time artifacts (val split inside data_train.csv)
+  model_output:        "models/model.joblib"
+  reports_dir:         "reports"
   roc_val_output:      "reports/roc_curve_val.png"
   cm_val_output:       "reports/confusion_matrix_val.png"
   metrics_val_output:  "reports/training_metrics.json"
   report_val_output:   "reports/training_report.md"
-  # Test-time artifacts (held-out test fold)
   roc_test_output:     "reports/roc_curve_test.png"
   cm_test_output:      "reports/confusion_matrix_test.png"
   metrics_test_output: "reports/test_metrics.json"
   report_test_output:  "reports/final_evaluation.md"
 
+# Filled by Optuna stage 1 (per-variant).
 vectorizer:
-  ngram_range:   [1, 2]                      # Unigrams + bigrams
-  min_df:        2                           # Term must appear in ≥ 2 docs
-  max_df:        0.95                        # Drop terms appearing in > 95% of docs (de facto stopwords)
-  sublinear_tf:  true                        # 1 + log(tf) instead of raw tf
-  max_features:  10000                       # Cap vocabulary size
+  ngram_range:   [1, 2]
+  min_df:        2
+  max_df:        0.95
+  sublinear_tf:  true
+  max_features:  10000
 
+# Filled by Optuna stage 2 (only the winning variant).
+# Fields beyond the first six are optional; build_model() uses sensible defaults.
 model:
   n_estimators:      500
   max_depth:         6
   learning_rate:     0.05
   eval_metric:       "auc"
-  scale_pos_weight:  0.93                    # Compensates class imbalance (n_neg/n_pos)
+  scale_pos_weight:  0.93
   random_state:      42
+  subsample:         1.0       # optional; default 1.0
+  colsample_bytree:  1.0       # optional; default 1.0
+  gamma:             0.0       # optional; default 0.0
+  min_child_weight:  1         # optional; default 1
+  reg_alpha:         0.0       # optional; default 0.0 (L1)
+  reg_lambda:        1.0       # optional; default 1.0 (L2)
+  early_stopping_rounds: 30    # optional; if present, training uses inner 90/10 eval_set
 
 training:
-  test_size:    0.2                          # Holdout fraction (inside the train split)
+  test_size:    0.2
   random_state: 42
-  n_splits:     5                            # StratifiedKFold splits for CV
+  n_splits:     5
 ```
 
 ---
@@ -191,70 +223,112 @@ training:
 ### 1. Install
 
 ```powershell
-# Activate venv
 venv\Scripts\activate
-
-# Install package + runtime deps
-pip install -e .
-
-# (Optional) dev deps for tests
 pip install -e ".[dev]"
 ```
 
-Python 3.11+ is required. Runtime dependencies: `pandas`, `numpy`, `scikit-learn`, `xgboost`, `nltk`, `joblib`, `pyyaml`, `matplotlib`, `optuna`, `ftfy`.
+Python 3.11+. Runtime deps: `pandas`, `numpy`, `scikit-learn`, `xgboost`, `nltk`, `joblib`, `pyyaml`, `matplotlib`, `optuna`, `ftfy`.
 
-### 2. Train
-
-```powershell
-python -m src train --config configs/default.yaml
-```
-
-Loads the YAML config; ingests `data.train_path`; cleans text; runs 5-fold Stratified CV + 80/20 holdout; fits final model on the 80% split; evaluates on the 20% val split; serializes the pipeline to `models/model.joblib`; and dumps:
-
-- `reports/roc_curve_val.png`
-- `reports/confusion_matrix_val.png`
-- `reports/training_metrics.json`
-- `reports/training_report.md`
-
-### 3. Evaluate against the held-out test fold
+### 2. Day-to-day commands
 
 ```powershell
-python -m src evaluate --input data/data_test_fold1.csv --config configs/default.yaml
+# Train on the active variant (reads configs/default.yaml by default)
+python -m src train
+
+# Evaluate the saved model against the labeled test fold
+python -m src evaluate --input data/data_test_fold1.csv
+
+# Predict on unlabeled data
+python -m src predict --input <csv> --output predictions.csv
 ```
 
-Loads the saved model; predicts on the test CSV (which must contain ground-truth `is_suicide`); computes the full metric dict; and dumps:
+Each subcommand accepts `--config configs/<variant>.yaml` to switch variants.
 
-- `reports/roc_curve_test.png`
-- `reports/confusion_matrix_test.png`
-- `reports/test_metrics.json`
-- `reports/final_evaluation.md`
-
-### 4. Predict on unlabeled data
+### 3. Two-stage Optuna optimization
 
 ```powershell
-python -m src predict --input data/data_test_fold1.csv --output predictions.csv --config configs/default.yaml
+# Stage 1: tune TF-IDF for ALL 4 variants (30 trials each), then train + evaluate each
+python scripts/run_optimization_pipeline.py --n-trials 30
+# → writes best vectorizer hyperparams back to each variant's YAML
+# → produces reports/<variant>/* and reports/optimization_results.json
+
+# Stage 2: tune XGB on the winning variant (auto-detected from stage-1 results)
+python scripts/run_xgb_optimization.py --n-trials 30
+# → writes best model hyperparams (incl. early_stopping_rounds) to the winner's YAML
+# → checkpoints to reports/optuna_xgb_<winner>.journal
+# → appends results to reports/optimization_results.json
+
+# Render the comparison markdown
+python scripts/generate_optimization_report.py
+# → reports/optimization.md
 ```
 
-Produces a CSV with columns: `text_id`, `prediction` (0/1), `probability` (P(class=1)). No metrics, no plots — just predictions.
+Override the auto-detection of the winner:
+```powershell
+python scripts/run_xgb_optimization.py --variant base
+```
+
+### 4. Resuming an interrupted optimization
+
+The XGB study uses **`optuna.storages.JournalStorage`**, which persists every completed trial to a journal file. If the process is killed mid-run, simply re-running the same command resumes from the last completed trial — no flags needed.
+
+```powershell
+python scripts/run_xgb_optimization.py --n-trials 30
+# Ctrl+C after trial 14...
+python scripts/run_xgb_optimization.py --n-trials 30
+# Resumes from trial 15. Total trials will be 30 across both runs.
+```
+
+To start over from scratch (ignoring the checkpoint):
+```powershell
+python scripts/run_xgb_optimization.py --no-resume
+```
+
+Stage 1 (TF-IDF) is in-memory and not checkpointed — its trials are fast (<10 s each) so resuming a partial run by re-doing the missing trials is cheap.
+
+---
+
+## Optuna search spaces
+
+**Stage 1 — TF-IDF (5 dimensions, per variant):**
+
+| Param | Space |
+|---|---|
+| `ngram_range` | `{(1,1), (1,2), (1,3)}` |
+| `min_df` | int in `[1, 5]` |
+| `max_df` | float in `[0.70, 0.99]` |
+| `sublinear_tf` | `{True, False}` |
+| `max_features` | `{5000, 10000, 20000, 50000}` |
+
+**Stage 2 — XGBoost (9 dimensions, winning variant only):**
+
+| Param | Space |
+|---|---|
+| `n_estimators` | int in `[100, 1500]` |
+| `max_depth` | int in `[3, 10]` |
+| `learning_rate` | log-uniform in `[0.005, 0.3]` |
+| `subsample` | float in `[0.6, 1.0]` |
+| `colsample_bytree` | float in `[0.6, 1.0]` |
+| `gamma` | float in `[0.0, 5.0]` |
+| `min_child_weight` | int in `[1, 10]` |
+| `reg_alpha` | log-uniform in `[1e-8, 10.0]` |
+| `reg_lambda` | log-uniform in `[1e-8, 10.0]` |
+
+`scale_pos_weight`, `eval_metric` and `random_state` are not tuned — they're domain decisions (`n_neg/n_pos`, `auc`, `42`).
+
+Both studies use TPE sampler with `random_state=42`. Objective: mean **5-fold StratifiedKFold ROC-AUC** on `data/data_train.csv`. The test fold (`data_test_fold1.csv`) is never touched during search — only at the very end for the reported Test AUC.
+
+**Early stopping** is **not** applied during CV (the `n_estimators` proposed by Optuna is the exact tree count used in each fold, keeping fold scores apples-to-apples). It **is** applied in the final training run via an inner 90/10 split of the 80% train partition, when `early_stopping_rounds` is present in the YAML.
 
 ---
 
 ## Latest results
 
-Last run on `data/data_test_fold1.csv` (252 rows, held out from training):
+> Refer to `reports/optimization.md` for the auto-generated comparison after running stage 1 + stage 2. The baseline pre-Optuna numbers below are from the initial commit (no tuning).
 
-| Metric | Value |
-|---|---|
-| **AUC** | **0.739** |
-| F1 | 0.688 |
-| Precision | 0.707 |
-| Recall (TPR) | 0.669 |
-| FPR | 0.295 |
-| TP / TN / FP / FN | 87 / 86 / 36 / 43 |
-
-5-fold CV on the train split: **AUC = 0.7596 ± 0.0275**.
-
-> See `reports/final_evaluation.md` for the auto-generated report.
+| | Val AUC | Test AUC | Recall | FPR |
+|---|---|---|---|---|
+| Baseline (defaults, no tuning) | 0.7264 | 0.739 | 0.669 | 0.295 |
 
 ---
 
@@ -264,63 +338,65 @@ Last run on `data/data_test_fold1.csv` (252 rows, held out from training):
 pytest
 ```
 
-**148 tests passing**, covering every module: ingestion, preprocessing, vectorizer, model, pipeline, evaluation (including `generate_report`), inference, and evaluate_cli.
+Coverage spans every module: ingestion, preprocessing (all 4 variants), vectorizer, model, pipeline, evaluation (incl. `generate_report`), inference, evaluate_cli, and optimization (incl. `optimize_xgb` with `n_trials=1` smoke tests + a checkpoint-resume test that verifies the journal persists trials across calls).
 
-Shared fixtures live in `tests/conftest.py` (toy pipeline config, trained-and-serialized pipeline on tmp_path, synthetic labeled CSV, full config dict with every path rooted in tmp_path so tests stay hermetic).
+Shared fixtures live in `tests/conftest.py` (toy pipeline config, trained-and-serialized pipeline on `tmp_path`, synthetic labeled CSV, full config dict with every path rooted in `tmp_path` so tests stay hermetic).
 
 ---
 
 ## Design decisions
 
-- **TF-IDF + XGBoost over deep learning.** For the data volume available (~1,500 train rows of English-language Reddit-style posts), a sparse linear feature space with a gradient-boosted tree classifier reaches competitive AUC at a fraction of the training cost — and is much easier to debug, version, and deploy.
+- **TF-IDF + XGBoost over deep learning.** For ~1,500 training rows of English-language Reddit-style posts, a sparse linear feature space with a gradient-boosted tree classifier reaches competitive AUC at a fraction of the training cost — and is much easier to debug, version, and deploy.
 - **`scale_pos_weight = 0.93`.** Empirical class ratio `n_neg / n_pos` in the training set; passed to XGBoost rather than oversampling because it preserves the original distribution at evaluation time.
-- **No explicit stopword list.** The combination of `max_df=0.95` + `sublinear_tf=True` + `min_df=2` already suppresses corpus-wide function words. Adding a hand-curated list would risk dropping high-signal tokens specific to the domain (e.g., "die", "alone").
-- **Cleaning inside the `Pipeline`.** Wrapping `clean_text` in a `FunctionTransformer` guarantees inference applies the *same* preprocessing as training — no separate "serve" path can drift.
+- **Cleaning inside the `Pipeline`.** Wrapping the chosen `clean_text*` in a `FunctionTransformer` guarantees inference applies the *same* preprocessing as training — no separate "serve" path can drift, regardless of variant.
+- **Two-stage tuning instead of joint.** TF-IDF (5 dims) + XGBoost (9 dims) = 14-dim joint space, intractable in 30 trials. Tuning the vectorizer first and freezing it before tuning the model decomposes the problem and converges on a much smaller budget. Trade-off: ignores interactions between the two — but those interactions are empirically minor at this scale.
+- **Early stopping only at final fit.** Inside CV, every fold trains exactly the `n_estimators` Optuna proposes, so fold scores are directly comparable. After Optuna picks the winner, the final training run uses an inner eval split + `early_stopping_rounds=30` so the deployed model stops growing trees once validation AUC plateaus, avoiding overfitting at deployment without distorting the CV signal.
 - **`predict` and `evaluate` as separate subcommands.** `predict` is for production-style blind inference (no labels). `evaluate` is for offline scoring against a labeled fold. Splitting them keeps `run_inference` ignorant of ground truth and makes `evaluate` the obvious entry point for the final test report.
-- **Markdown reports per run.** `generate_report` consumes the metrics dict + plot PNGs and emits a self-contained `*.md` whose image paths are rewritten relative to the report's directory — so the file renders correctly when opened from anywhere, including GitHub.
+- **JournalStorage for XGB checkpoints.** XGB studies are 5–10× slower than TF-IDF studies (deeper trees, more rounds). Persisting the study to a journal file means a Ctrl+C or laptop sleep doesn't waste the trials already done.
 
 ---
 
 ## Roadmap
 
-Derived from the project plan in `Roadmap Enfoque Clásico TF-IDF + XGBoost.md`. `[x]` is shipped, `[ ]` is pending.
+`[x]` is shipped, `[ ]` is pending.
 
 ### Shipped
 
-- [x] Repo scaffolding (`pyproject.toml`, `src/`, `tests/`, `configs/`, `notebooks/`, `models/`, `data/`, `reports/`).
+- [x] Project scaffolding (`pyproject.toml`, `src/`, `tests/`, `configs/`, `notebooks/`, `models/`, `data/`, `reports/`, `scripts/`).
 - [x] `data_ingestion`: schema validation, CSV loader, NaN handling, `title + text` concatenation, `yes/no → 1/0` mapping, stratified `split_dataset`, early `None` return on schema mismatch.
-- [x] `preprocessing`: idempotent `clean_text` (encoding repair, lowercase, URLs, mentions, hashtags, emojis, special chars, whitespace).
-- [x] `vectorizer`: YAML-driven `TfidfVectorizer` (`(1,2)` n-grams, `min_df=2`, `max_df=0.95`, `sublinear_tf=True`, `max_features=10000`).
-- [x] `model`: YAML-driven `XGBClassifier` with `scale_pos_weight=0.93` for class imbalance.
-- [x] `pipeline`: end-to-end `cleaner → tfidf → xgboost` Pipeline — TF-IDF only sees train data, no leakage.
-- [x] `training`: stratified 80/20 split + 5-fold Stratified CV with AUC, holdout AUC, full evaluation, JSON dump, markdown report, `joblib.dump` persistence.
-- [x] `evaluation`: TP/TN/FP/FN, TPR, FPR, AUC, precision, recall, F1; ROC and confusion-matrix PNGs; `generate_report` markdown renderer with embedded plots.
-- [x] `inference`: blind CLI (`python -m src predict`) that loads the pipeline and writes `text_id, prediction, probability`.
-- [x] `evaluate_cli`: labeled-scoring CLI (`python -m src evaluate`) that produces full metrics + report against a labeled CSV.
-- [x] **First baseline run on the real dataset** — Val AUC 0.7264 · Test AUC 0.739 · 5-fold CV 0.7596 ± 0.0275. Artifacts in `reports/`.
-- [x] Unit tests for every module under `tests/` (148 passing).
-- [x] EDA notebook + pipeline smoke-test notebook.
+- [x] `preprocessing`: baseline `clean_text` + 3 variants (`stopwords_nltk`, `stopwords_domain`, `stemming`). Negation whitelist enforced everywhere.
+- [x] `vectorizer`: YAML-driven `TfidfVectorizer`.
+- [x] `model`: YAML-driven `XGBClassifier` with 9 tunable hyperparameters + back-compat defaults.
+- [x] `pipeline`: end-to-end `cleaner → tfidf → xgboost` with a `CLEANERS` registry. Variant chosen via config.
+- [x] `training`: stratified 80/20 + 5-fold Stratified CV (AUC); optional `early_stopping_rounds` activated by YAML.
+- [x] `evaluation`: TP/TN/FP/FN, TPR, FPR, AUC, precision, recall, F1; ROC and confusion-matrix PNGs; `generate_report` markdown renderer.
+- [x] `inference`: blind CLI (`python -m src predict`).
+- [x] `evaluate_cli`: labeled-scoring CLI (`python -m src evaluate`).
+- [x] `optimization` stage 1: `optimize_vectorizer` (5-dim TF-IDF space, 30 trials, 5-fold CV).
+- [x] `optimization` stage 2: `optimize_xgb` (9-dim XGB space, 30 trials, 5-fold CV) with `JournalStorage` checkpointing and per-trial progress logging.
+- [x] `pick_winner_variant` to wire stage 1 → stage 2 automatically.
+- [x] Orchestrator scripts under `scripts/`: `run_optimization_pipeline.py`, `run_xgb_optimization.py`, `generate_optimization_report.py`.
+- [x] EDA notebook with honest outlier analysis and decision rationale.
+- [x] Full pytest coverage of every module (~215 tests passing).
 
 ### Next steps (short term)
 
-- [ ] **Early stopping** in XGBoost: enable `early_stopping_rounds=30` with an `eval_set` (requires plumbing `eval_set` through `pipeline.fit`).
-- [ ] **`reports/optimization.md`** — hand-written: techniques applied, before/after table on AUC + training time, decisions on hyperparameters.
 - [ ] **`reports/algorithm_justification.md`** — hand-written: why TF-IDF + XGBoost over deep learning, with literature references.
+- [ ] **Threshold tuning**. Default is 0.5; in this domain a false negative is costlier than a false positive. After inspecting the precision-recall curve, evaluate thresholds in `{0.35, 0.40, 0.45}` and pick by recall floor.
+- [ ] **Error analysis**. Surface the top-K false negatives and false positives, look for systematic patterns (length, vocabulary, sarcasm), feed findings back into preprocessing.
 
 ### Next steps (mid term)
 
-- [ ] **Hyperparameter tuning with Optuna** (already a declared dependency). Search space candidates: `max_depth ∈ [3,8]`, `learning_rate ∈ [0.01, 0.2]`, `n_estimators ∈ [200, 1000]`, `min_df ∈ [1,5]`, `max_features ∈ [5k, 20k]`. Optimize 5-fold CV AUC.
-- [ ] **Threshold tuning**. Default is 0.5; in this domain a false negative (undetected crisis) is more costly than a false positive. After inspecting the precision-recall curve, evaluate thresholds in `{0.35, 0.40, 0.45}` and pick by recall floor.
-- [ ] **Error analysis**. Surface the top-K false negatives and false positives, look for systematic patterns (length, vocabulary, sarcasm), feed findings back into preprocessing or thresholding.
+- [ ] **User-disjoint splits**: currently ~14% of test rows come from users also present in train. Stratify by `user_id` instead of by row for a stricter methodological story.
 - [ ] **Coverage report**: `pytest --cov=src --cov-report=term-missing`, target ≥ 80%.
-- [ ] **Document the train/test split provenance**: the script that produced `data_train.csv` and `data_test_fold1.csv` isn't checked in. Either commit it or wrap `split_dataset` so the split is reproducible from a single raw source.
+- [ ] **Document the train/test split provenance**: the script that produced `data_train.csv` and `data_test_fold1.csv` isn't checked in. Wrap `split_dataset` so the split is reproducible from a single raw source.
 
 ### Next steps (stretch)
 
-- [ ] **`TruncatedSVD` post-TF-IDF** as a dimensionality-reduction experiment — only worth it if the sparse matrix becomes a memory/speed bottleneck.
-- [ ] **NLTK stopword ablation** to confirm the `max_df=0.95` cap is doing the work an explicit stopword list would do.
-- [ ] **Strategy pattern for preprocessing**: define a `Preprocessor` interface so cleaning variants (with/without stemming, lemmatization, stopwords) can be swapped from config without touching `pipeline.py`.
-- [ ] **User-disjoint splits**: currently ~14% of test rows come from users also present in train. For a stricter methodological story, stratify by `user_id` instead of by row.
+- [ ] **`TruncatedSVD` post-TF-IDF** — only worth it if the sparse matrix becomes a memory/speed bottleneck.
+- [ ] **Strategy pattern for preprocessing**: define a `Preprocessor` interface so cleaning variants can be swapped from config without touching `pipeline.py`.
+- [ ] **Combined variants**: e.g., `stemming + stopwords_domain`. Worth trying if individual variants show real lift over baseline.
+- [ ] **Pruning during XGB CV**: report intermediate fold scores so Optuna can prune unpromising trials early. Requires reporting per-fold AUCs in the objective.
 
 ---
 

@@ -1,3 +1,12 @@
+# ============================================================================
+# Preprocessing variants
+#
+# Authors (equipo del proyecto TC3002B):
+#   Aislinn Ruiz Sandoval
+#   Iván Alexander Ramos Ramírez
+#   Miguel Ángel Galicia Sánchez
+#   Víctor Alejandro Morales García
+# ============================================================================
 import re
 from functools import lru_cache
 
@@ -168,15 +177,7 @@ def preprocessing(df: pd.DataFrame, text_column: str) -> pd.DataFrame:
 ## codigo muerto de momento
 
 
-# ============================================================================
-# Preprocessing variants
-#
-# Authors (equipo del proyecto TC3002B):
-#   Aislinn Ruiz Sandoval
-#   Iván Alexander Ramos Ramírez
-#   Miguel Ángel Galicia Sánchez
-#   Víctor Alejandro Morales García
-# ============================================================================
+
 
 # Negations that must NEVER be removed: they flip the semantics of a sentence
 # and are especially load-bearing in suicide-ideation text

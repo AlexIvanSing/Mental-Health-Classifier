@@ -5,12 +5,82 @@ import os
 import joblib
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
 from sklearn.metrics import roc_auc_score
+from sklearn.pipeline import Pipeline
 
 from src.pipeline import build_pipeline
 from src.data_ingestion import ingestion
 from src.preprocessing import clean_text
 from src.evaluation import evaluate, generate_report
 from src.utils import load_config
+
+
+def _fit_with_early_stopping(
+    pipeline: Pipeline,
+    X,
+    y,
+    early_stopping_rounds: int,
+    random_state: int,
+) -> Pipeline:
+    """
+    Fit `pipeline` with an inner 90/10 split used as eval_set for XGBoost
+    early stopping. The cleaner+TF-IDF steps are fitted on the 90% inner
+    train; the XGB step is fitted with the 10% inner eval as `eval_set`
+    so trees stop growing once validation AUC plateaus.
+
+    This preserves the train/serve consistency property of the Pipeline:
+    the returned object is a fully-fitted sklearn Pipeline that accepts
+    raw strings end-to-end.
+
+    Parameters
+    ----------
+    pipeline : sklearn.pipeline.Pipeline
+        Unfitted pipeline produced by `build_pipeline`. Must have steps
+        named "cleaner", "tfidf", "clf".
+    X, y : array-like
+        Outer training partition (the 80% from the train/val split).
+    early_stopping_rounds : int
+        Passed verbatim to `XGBClassifier.fit`.
+    random_state : int
+        Seed for the inner stratified split.
+
+    Returns
+    -------
+    sklearn.pipeline.Pipeline
+        The same pipeline, fully fitted.
+    """
+    X_in, X_es, y_in, y_es = train_test_split(
+        X, y, test_size=0.10, random_state=random_state, stratify=y,
+    )
+
+    cleaner = pipeline.named_steps["cleaner"]
+    tfidf = pipeline.named_steps["tfidf"]
+    clf = pipeline.named_steps["clf"]
+
+    # FunctionTransformer is stateless; "fit" is a no-op. We still call it
+    # so any future stateful cleaner picks up the train distribution.
+    X_in_clean = cleaner.fit_transform(X_in)
+    X_es_clean = cleaner.transform(X_es)
+
+    X_in_vec = tfidf.fit_transform(X_in_clean)
+    X_es_vec = tfidf.transform(X_es_clean)
+
+    # XGBoost >= 2.0 reads `early_stopping_rounds` from the constructor;
+    # set_params() before fit() is the supported way to inject it.
+    clf.set_params(early_stopping_rounds=early_stopping_rounds)
+    clf.fit(
+        X_in_vec, y_in,
+        eval_set=[(X_es_vec, y_es)],
+        verbose=False,
+    )
+
+    best_iter = getattr(clf, "best_iteration", None)
+    n_grown = (best_iter + 1) if best_iter is not None else clf.n_estimators
+    print(
+        f"Early stopping: trees grown = {n_grown} "
+        f"(cap was {clf.n_estimators}, patience = {early_stopping_rounds})"
+    )
+
+    return pipeline
 
 
 def train(X: list, y, config: dict) -> tuple[object, dict, dict]:
@@ -63,7 +133,15 @@ def train(X: list, y, config: dict) -> tuple[object, dict, dict]:
     auc_std  = cv_results["test_score"].std()
     print(f"CV AUC: {auc_mean:.4f} ± {auc_std:.4f}")
 
-    pipeline.fit(X_train, y_train)
+    early_stopping = config["model"].get("early_stopping_rounds")
+    if early_stopping:
+        pipeline = _fit_with_early_stopping(
+            pipeline, X_train, y_train,
+            early_stopping_rounds=int(early_stopping),
+            random_state=config["training"]["random_state"],
+        )
+    else:
+        pipeline.fit(X_train, y_train)
 
     y_proba = pipeline.predict_proba(X_val)[:, 1]
     y_pred = pipeline.predict(X_val)

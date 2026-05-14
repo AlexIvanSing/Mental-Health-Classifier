@@ -248,7 +248,72 @@ def main():
     out.append("")
 
     # 6. Conclusión
-    out.append("## 6. Conclusión y elección final")
+    # --- XGB tuning section (only if present in the JSON) ----------------
+    if "xgb_optimization" in data:
+        xgb = data["xgb_optimization"]
+        winner_v = xgb["variant"]
+        baseline_test = data[winner_v]["test"]
+        tuned_test = xgb["test"]
+        delta = tuned_test["AUC"] - baseline_test["AUC"]
+
+        out.append("## 6. Optimización del XGBClassifier")
+        out.append("")
+        out.append(
+            f"Tras seleccionar **`{winner_v}`** como ganadora del tuning de "
+            f"TF-IDF, se ejecutó un segundo estudio Optuna ({xgb['n_trials']} "
+            f"trials, TPE sampler, 5-fold Stratified CV AUC) sobre los 9 "
+            f"hiperparámetros del clasificador. El estudio se persistió a "
+            f"`{xgb['storage_path']}` para permitir reanudación tras "
+            f"interrupciones."
+        )
+        out.append("")
+
+        out.append("### 6.1. Hiperparámetros XGB óptimos")
+        out.append("")
+        out.append("| Hiperparámetro | Valor |")
+        out.append("|---|---|")
+        for k, v in xgb["best_params"].items():
+            out.append(f"| `{k}` | {v} |")
+        out.append("")
+        out.append("Más los fijos no tuneados:")
+        out.append("")
+        for k, v in xgb.get("fixed_keys", {}).items():
+            out.append(f"- `{k}`: {v}")
+        out.append("")
+
+        out.append("### 6.2. Antes vs después del tuning de XGB")
+        out.append("")
+        out.append("| Métrica | Antes (XGB defaults) | Después (XGB tuneado) | Δ |")
+        out.append("|---|---|---|---|")
+        for metric in ("AUC", "F1", "precision", "recall", "FPR"):
+            before = baseline_test[metric]
+            after  = tuned_test[metric]
+            d = after - before
+            sign = "+" if d >= 0 else ""
+            out.append(f"| {metric} | {fmt_pct(before)} | {fmt_pct(after)} | {sign}{d:.4f} |")
+        out.append("")
+
+        if delta > 0.005:
+            verdict_xgb = (
+                f"**Mejora significativa** (Δ AUC = +{delta:.4f}). El tuning de "
+                f"XGB compensa el costo de optimización adicional."
+            )
+        elif delta < -0.002:
+            verdict_xgb = (
+                f"**Regresión** (Δ AUC = {delta:.4f}). El XGB tuneado es peor "
+                f"que el default — posiblemente overfitting al CV. Conservar la "
+                f"configuración previa."
+            )
+        else:
+            verdict_xgb = (
+                f"**Equivalente al default** (Δ AUC = {delta:+.4f}, dentro del "
+                f"ruido de CV). El tuning explora valores cercanos a los "
+                f"defaults; no hay ganancia clara pero tampoco regresión."
+            )
+        out.append(f"**Veredicto:** {verdict_xgb}")
+        out.append("")
+
+    out.append("## 7. Conclusión y elección final")
     out.append("")
     winner_info = VARIANT_DESCRIPTIONS[winner]
     base_auc = data["base"]["test"]["AUC"]
@@ -293,7 +358,7 @@ def main():
     out.append("")
 
     # 7. Apéndice — distribución de trials
-    out.append("## 7. Apéndice — distribución de trials de Optuna")
+    out.append("## 8. Apéndice — distribución de trials de Optuna")
     out.append("")
     out.append("Para cada variante, los 30 AUC observados durante la búsqueda:")
     out.append("")
