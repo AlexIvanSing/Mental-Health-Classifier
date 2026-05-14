@@ -1,5 +1,5 @@
 data:
-  train_path: "data/data_test_fold1.csv"
+  train_path: "data/data_train.csv"
   test_path: "data/data_test_fold1.csv"
   expected_columns:
     - "user_id"

@@ -112,8 +112,8 @@ All runtime parameters live in `configs/default.yaml`:
 
 ```yaml
 data:
-  train_path: "data/data_test_fold1.csv"     # Path to training CSV
-  test_path:  "data/data_test_fold1.csv"     # Path to test CSV
+  train_path: "data/data_train.csv"          # Path to training CSV
+  test_path:  "data/data_test_fold1.csv"     # Path to test CSV (held out)
   expected_columns: [user_id, text_id, title, text, is_suicide]
   text_columns:     [title, text]            # Concatenated into "title_text"
   target_column:    "is_suicide"
@@ -239,7 +239,7 @@ Derived from the project plan in `Roadmap Enfoque Clásico TF-IDF + XGBoost.md`.
 
 - [ ] **First baseline run** on the real dataset — record AUC, F1, recall and commit the resulting metrics + ROC/CM PNGs under `reports/baseline.md`.
 - [ ] **Early stopping** in XGBoost: enable `early_stopping_rounds=30` with an `eval_set` (currently dropped because it needs `eval_set` plumbed through `pipeline.fit`). Will require either splitting the fit into two stages or using `XGBClassifier`'s callbacks.
-- [ ] **Frozen train/test splits**: run `split_dataset` once on the raw 1,516-row dataset and commit `data/train.csv` + `data/test.csv` (currently both `data.train_path` and `data.test_path` point to `data_test_fold1.csv`).
+- [ ] **Document the train/test split provenance**: `data/data_train.csv` (7,002 rows) and `data/data_test_fold1.csv` (1,192 rows) are already disjoint, but the script that produced them isn't checked in. Either commit it or wrap `split_dataset` so the split is reproducible from a single raw source.
 - [ ] **Plot generation inside `train_pipeline`**: call `evaluate()` on the holdout right after `train()` so every training run drops fresh `reports/roc_curve.png` and `reports/confusion_matrix.png`.
 - [ ] **`reports/` directory** with three markdowns required by the assignment:
   - `optimization.md` — techniques applied, before/after table on AUC + training time.
