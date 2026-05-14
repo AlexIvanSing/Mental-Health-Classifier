@@ -71,7 +71,6 @@ def run_inference(
 
     # --- Preprocess ---
     text_col = "_".join(config["data"]["text_columns"])
-    df[text_col] = df[text_col].apply(clean_text)
 
     # --- Load model & predict ---
     pipeline = load_pipeline(config["paths"]["model_output"])

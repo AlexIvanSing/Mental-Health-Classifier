@@ -56,7 +56,8 @@ def overwrite_vectorizer_block(yaml_path: str, best_params: dict) -> None:
         yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
 
 
-def main(n_trials: int = 30) -> None:
+def main(n_trials: int = 30, timeout: int | None = None) -> None:
+
     print("=" * 72)
     print(f"Step 1/4: Optuna search over {len(VARIANT_CONFIGS)} variants  "
           f"(n_trials={n_trials} each)")
@@ -67,6 +68,7 @@ def main(n_trials: int = 30) -> None:
     optuna_results = run_all_optimizations(
         config_path="configs/default.yaml",
         n_trials=n_trials,
+        timeout=timeout,
     )
 
     print("=" * 72)
@@ -158,5 +160,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-trials", type=int, default=30)
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="Seconds per variant. If set, overrides --n-trials as stopping criterion.")
     args = parser.parse_args()
-    main(n_trials=args.n_trials)
+    main(n_trials=args.n_trials, timeout=args.timeout)

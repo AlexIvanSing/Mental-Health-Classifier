@@ -196,7 +196,6 @@ def train_pipeline(config_path: str) -> dict:
     )
 
     text_col = "_".join(config["data"]["text_columns"])
-    df[text_col] = df[text_col].apply(clean_text)
 
     X = df[text_col].tolist()
     y = df[config["data"]["target_column"]].tolist()

@@ -97,6 +97,7 @@ def optimize_vectorizer(
     variant: str,
     config_path: str,
     n_trials: int = 30,
+    timeout: int | None = None
 ) -> dict:
     """
     Run an Optuna study over TF-IDF hyperparameters for one preprocessing variant.
@@ -175,7 +176,7 @@ def optimize_vectorizer(
             seed=base_config["training"]["random_state"]
         ),
     )
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+    study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=False)
 
     # Resolve the ngram_idx back to a real tuple for human consumption /
     # YAML overwrite. Everything else is already a primitive.
@@ -208,6 +209,7 @@ def optimize_vectorizer(
 def run_all_optimizations(
     config_path: str = "configs/default.yaml",
     n_trials: int = 30,
+    timeout: int | None = None,
     variants: tuple[str, ...] = VARIANTS,
 ) -> dict:
     """
@@ -231,13 +233,13 @@ def run_all_optimizations(
         `optimize_vectorizer`.
     """
     print(f"Running Optuna optimization for variants: {variants}")
-    print(f"n_trials per variant: {n_trials}")
+    print(f"n_trials per variant: {n_trials}  |  timeout per variant: {timeout}s")
     print(f"Base config: {config_path}\n")
 
     results = {}
     for v in variants:
         print(f"--- Optimizing variant: {v} ---")
-        results[v] = optimize_vectorizer(v, config_path, n_trials=n_trials)
+        results[v] = optimize_vectorizer(v, config_path, n_trials=n_trials, timeout=timeout)
         print()
 
     print("All variants done.")
