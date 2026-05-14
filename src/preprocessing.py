@@ -51,6 +51,7 @@ def normalize_hashtags(text: str) -> str:
 
 
 def remove_emojis(text: str) -> str:
+    """Remove unicode emojis and common ASCII emoticons from text."""
     text = re.sub(r'[\U00010000-\U0010ffff]', ' ', text)
     text = re.sub(r'[:;=][\'\-]?[)(D/\\|PpOo]', ' ', text)
     return text
@@ -112,19 +113,45 @@ def clean_text(text: str) -> str:
 #def remove_stop_words(sentence:str) -> list:
 #    return
 def tokenize_text(sentence: str) -> list:
+    """
+    Tokenize a sentence by splitting on whitespace.
+
+    Parameters
+    ----------
+    sentence : str
+        Cleaned input sentence.
+
+    Returns
+    -------
+    list of str
+        List of whitespace-separated tokens. Empty list if input is falsy.
+    """
     if not sentence:
         return []
     return sentence.split(" ")
-    
+
+
 def preprocessing(df: pd.DataFrame, text_column: str) -> pd.DataFrame:
+    """
+    Apply `clean_text` to a text column of a DataFrame in place.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+    text_column : str
+        Name of the column to clean.
+
+    Returns
+    -------
+    pd.DataFrame or None
+        DataFrame with the cleaned column, or None on failure.
+    """
     try:
-        # limpiar text
         df[text_column] = df[text_column].apply(clean_text)
-        relevant_columns = [text_column, "tokenized"]
-        newcolumn = "_".join(relevant_columns)
-        # tokenizar text
-        df[newcolumn] = df[text_column].apply(tokenize_text)
         return df
-    except:
-        print("dataframe unable to preprocess")
+    except Exception as e:
+        print(f"dataframe unable to preprocess: {e}")
         return None
+    
+## codigo muerto de momento

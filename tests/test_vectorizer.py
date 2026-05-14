@@ -3,7 +3,8 @@ import tempfile
 import os
 import yaml
 from sklearn.feature_extraction.text import TfidfVectorizer
-from src.vectorizer import load_config, build_vectorizer
+from src.vectorizer import build_vectorizer
+from src.utils import load_config
 
 # --- FIXTURES ---
 

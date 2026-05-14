@@ -89,3 +89,26 @@ def run_inference(
     print(f"Predictions saved → {output_path}  ({len(results)} rows)")
 
     return results
+
+def run_inference_cli(input_path: str, output_path: str, config_path: str) -> pd.DataFrame:
+    """
+    CLI wrapper: loads the YAML config from disk and delegates to `run_inference`.
+    """
+    config = load_config(config_path)
+    return run_inference(input_path, output_path, config)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Run inference on a CSV file using a trained pipeline."
+    )
+    parser.add_argument("--input",  required=True, help="Path to input CSV")
+    parser.add_argument("--output", required=True, help="Path to output predictions CSV")
+    parser.add_argument("--config", default="configs/default.yaml")
+    args = parser.parse_args()
+
+    run_inference_cli(args.input, args.output, args.config)
+
+
+if __name__ == "__main__":
+    main()
