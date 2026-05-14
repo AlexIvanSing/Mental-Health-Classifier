@@ -1,104 +1,16 @@
-import os
-import tempfile
-import numpy as np
 import pandas as pd
-import joblib
-import yaml
 import pytest
 
 from src.inference import load_pipeline, predict, run_inference, run_inference_cli
-from src.pipeline import build_pipeline
 
-
-# --- shared fixtures ---
-
-@pytest.fixture
-def pipeline_config():
-    return {
-        "vectorizer": {
-            "ngram_range": [1, 2],
-            "min_df": 1,
-            "max_df": 1.0,
-            "sublinear_tf": True,
-            "max_features": 50,
-        },
-        "model": {
-            "n_estimators": 10,
-            "max_depth": 3,
-            "learning_rate": 0.1,
-            "eval_metric": "auc",
-            "random_state": 42,
-            "scale_pos_weight": 1.0,
-        },
-    }
-
-
-@pytest.fixture
-def trained_pipeline(pipeline_config):
-    """Fit a tiny pipeline on a toy corpus so it's ready for inference."""
-    X = [
-        "i want to end my life",
-        "i cannot take this anymore",
-        "today is a beautiful day",
-        "what a wonderful weekend",
-        "everything hurts and feels empty",
-        "i love spending time with friends",
-    ]
-    y = np.array([1, 1, 0, 0, 1, 0])
-    pipe = build_pipeline(pipeline_config)
-    pipe.fit(X, y)
-    return pipe
-
-
-@pytest.fixture
-def model_on_disk(trained_pipeline, tmp_path):
-    """Serialize the trained pipeline to a temp .joblib path."""
-    model_path = tmp_path / "model.joblib"
-    joblib.dump(trained_pipeline, model_path)
-    return str(model_path)
-
-
-@pytest.fixture
-def input_csv(tmp_path):
-    """Synthetic CSV matching the project's expected schema."""
-    df = pd.DataFrame({
-        "user_id":   ["u1", "u2", "u3"],
-        "text_id":   ["t1", "t2", "t3"],
-        "title":     ["help me", "good morning", "the void"],
-        "text":      ["I cannot go on", "I love today", "darkness inside"],
-        "is_suicide": ["yes", "no", "yes"],
-    })
-    path = tmp_path / "input.csv"
-    df.to_csv(path, index=False)
-    return str(path)
-
-
-@pytest.fixture
-def full_config(model_on_disk):
-    return {
-        "data": {
-            "expected_columns": ["user_id", "text_id", "title", "text", "is_suicide"],
-            "text_columns":     ["title", "text"],
-        },
-        "paths": {
-            "model_output": model_on_disk,
-        },
-    }
-
-
-@pytest.fixture
-def config_file(full_config, tmp_path):
-    path = tmp_path / "config.yaml"
-    with open(path, "w") as f:
-        yaml.safe_dump(full_config, f)
-    return str(path)
+# Fixtures (pipeline_config, trained_pipeline, model_on_disk, input_csv,
+# full_config, config_file) come from tests/conftest.py.
 
 
 # --- load_pipeline ---
 
 def test_load_pipeline_returns_fitted_object(model_on_disk):
     pipe = load_pipeline(model_on_disk)
-    # smoke-check it can predict (i.e. is actually fitted)
     preds = pipe.predict(["hello world"])
     assert len(preds) == 1
 

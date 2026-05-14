@@ -15,7 +15,16 @@ data:
   value_false: "no"
 
 paths:
-  model_output: "models/model.joblib"
+  model_output:        "models/model.joblib"
+  reports_dir:         "reports"
+  roc_val_output:      "reports/roc_curve_val.png"
+  cm_val_output:       "reports/confusion_matrix_val.png"
+  metrics_val_output:  "reports/training_metrics.json"
+  report_val_output:   "reports/training_report.md"
+  roc_test_output:     "reports/roc_curve_test.png"
+  cm_test_output:      "reports/confusion_matrix_test.png"
+  metrics_test_output: "reports/test_metrics.json"
+  report_test_output:  "reports/final_evaluation.md"
 
 vectorizer:
   ngram_range: [1, 2]

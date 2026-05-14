@@ -14,6 +14,12 @@ def main():
     predict_parser.add_argument("--output", required=True)
     predict_parser.add_argument("--config", default="configs/default.yaml")
 
+    evaluate_parser = subparsers.add_parser(
+        "evaluate", help="Score the trained model against a labeled CSV"
+    )
+    evaluate_parser.add_argument("--input",  required=True)
+    evaluate_parser.add_argument("--config", default="configs/default.yaml")
+
     args = parser.parse_args()
 
     if args.command == "train":
@@ -25,6 +31,11 @@ def main():
         from src.inference import main as inference_main
         sys.argv = ["src", "--input", args.input, "--output", args.output, "--config", args.config]
         inference_main()
+
+    elif args.command == "evaluate":
+        from src.evaluate_cli import main as evaluate_main
+        sys.argv = ["src", "--input", args.input, "--config", args.config]
+        evaluate_main()
 
     else:
         parser.print_help()

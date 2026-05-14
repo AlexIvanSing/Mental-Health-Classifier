@@ -166,10 +166,9 @@ def ingestion(
         Processed dataframe ready for preprocessing.
     """
 
-    #if not schema_validation(data_url, expected_columns):
-    #    raise ValueError("Dataset schema is not valid.")
-
-    df = data_loader(data_url,expected_columns )
+    df = data_loader(data_url, expected_columns)
+    if df is None:
+        return None
 
     df = handle_missing_data(df)
 
@@ -237,7 +236,7 @@ def split_dataset(
 
     train_df.to_csv(train_path, index=False)
     test_df.to_csv(test_path,  index=False)
-    print(f"Train: {len(train_df)} rows → {train_path}")
-    print(f"Test:  {len(test_df)} rows → {test_path}")
+    print(f"Train: {len(train_df)} rows -> {train_path}")
+    print(f"Test:  {len(test_df)} rows -> {test_path}")
 
     return train_df, test_df

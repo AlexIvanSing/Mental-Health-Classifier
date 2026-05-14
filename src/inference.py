@@ -86,7 +86,7 @@ def run_inference(
     })
 
     results.to_csv(output_path, index=False)
-    print(f"Predictions saved → {output_path}  ({len(results)} rows)")
+    print(f"Predictions saved -> {output_path}  ({len(results)} rows)")
 
     return results
 

@@ -1,6 +1,9 @@
+import os
+from datetime import datetime
+
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")  # non-interactive backend → no Tk/Qt dependency
+matplotlib.use("Agg")  # non-interactive backend -> no Tk/Qt dependency
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from sklearn.metrics import (
@@ -75,7 +78,7 @@ def plot_roc_curve(y_true, y_proba, output_path: str = "reports/roc_curve.png") 
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
-    print(f"ROC curve saved → {output_path}")
+    print(f"ROC curve saved -> {output_path}")
 
 
 def plot_confusion_matrix(
@@ -126,7 +129,7 @@ def plot_confusion_matrix(
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
-    print(f"Confusion matrix saved → {output_path}")
+    print(f"Confusion matrix saved -> {output_path}")
 
 
 def evaluate(
@@ -155,3 +158,92 @@ def evaluate(
     plot_roc_curve(y_true, y_proba, roc_path)
     plot_confusion_matrix(y_true, y_pred, output_path=cm_path)
     return metrics
+
+
+def generate_report(
+    metrics: dict,
+    roc_path: str = "reports/roc_curve.png",
+    cm_path: str = "reports/confusion_matrix.png",
+    output_path: str = "reports/final_evaluation.md",
+    title: str = "Reporte de Evaluación — Detección de Ideación Suicida",
+) -> None:
+    """
+    Render a markdown evaluation report from a metrics dict and existing plot PNGs.
+
+    The report includes a metrics table, the confusion-matrix counts in tabular
+    form, optional K-fold CV scores (if `cv_fold_scores` is present in metrics),
+    and embedded references to the ROC and confusion-matrix PNGs (paths are
+    rewritten relative to the report's directory so the markdown renders
+    correctly when opened from anywhere).
+
+    Parameters
+    ----------
+    metrics : dict
+        Output of `compute_metrics` / `evaluate`. Expected keys:
+        AUC, F1, precision, recall, FPR, TP, TN, FP, FN. Optional:
+        cv_fold_scores, cv_auc_mean, cv_auc_std.
+    roc_path : str
+        Path to the ROC curve PNG (must already exist).
+    cm_path : str
+        Path to the confusion-matrix PNG (must already exist).
+    output_path : str
+        Where to write the markdown report.
+    title : str
+        Top-level title rendered at the top of the report.
+    """
+    fold_scores = metrics.get("cv_fold_scores", [])
+    fold_rows = "\n".join(
+        f"| Fold {i+1} | {score:.4f} |"
+        for i, score in enumerate(fold_scores)
+    )
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    roc_rel = os.path.relpath(roc_path, os.path.dirname(output_path)).replace("\\", "/")
+    cm_rel  = os.path.relpath(cm_path,  os.path.dirname(output_path)).replace("\\", "/")
+
+    cv_section = ""
+    if fold_scores:
+        cv_section = f"""## Validación cruzada (K-Fold)
+
+| Fold | AUC |
+|------|-----|
+{fold_rows}
+| **Promedio** | **{metrics.get('cv_auc_mean', 'N/A')}** |
+| **Std** | {metrics.get('cv_auc_std', 'N/A')} |
+
+"""
+
+    content = f"""# {title}
+
+_Generado: {datetime.now().strftime("%Y-%m-%d %H:%M")}_
+
+## Métricas sobre el conjunto de prueba
+
+| Métrica | Valor |
+|---------|-------|
+| AUC | **{metrics['AUC']}** |
+| F1 | {metrics['F1']} |
+| Precision | {metrics['precision']} |
+| Recall (TPR) | {metrics['recall']} |
+| FPR | {metrics['FPR']} |
+
+## Matriz de confusión
+
+| | Pred. Negativo | Pred. Positivo |
+|--|--|--|
+| **Real Negativo** | TN = {metrics['TN']} | FP = {metrics['FP']} |
+| **Real Positivo** | FN = {metrics['FN']} | TP = {metrics['TP']} |
+
+{cv_section}## Curva ROC
+
+![ROC Curve]({roc_rel})
+
+## Matriz de confusión (visualización)
+
+![Confusion Matrix]({cm_rel})
+"""
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"Reporte guardado -> {output_path}")

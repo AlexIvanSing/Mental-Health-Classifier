@@ -7,6 +7,7 @@ from src.evaluation import (
     plot_roc_curve,
     plot_confusion_matrix,
     evaluate,
+    generate_report,
 )
 
 
@@ -129,3 +130,104 @@ def test_evaluate_returns_metrics_and_writes_plots(y_true, y_pred, y_proba):
         assert metrics["TP"] == 3
         assert os.path.exists(roc)
         assert os.path.exists(cm)
+
+
+# --- generate_report ---
+
+def _full_metrics_fixture():
+    return {
+        "TP": 87, "TN": 86, "FP": 36, "FN": 43,
+        "TPR": 0.6692, "FPR": 0.2951,
+        "AUC": 0.739, "precision": 0.7073, "recall": 0.6692, "F1": 0.6877,
+        "cv_auc_mean": 0.7596, "cv_auc_std": 0.0275,
+        "cv_fold_scores": [0.81, 0.75, 0.75, 0.75, 0.73],
+    }
+
+
+def test_generate_report_creates_markdown_file(tmp_path):
+    out = tmp_path / "report.md"
+    generate_report(
+        _full_metrics_fixture(),
+        roc_path=str(tmp_path / "roc.png"),
+        cm_path=str(tmp_path / "cm.png"),
+        output_path=str(out),
+    )
+    assert out.exists()
+    assert out.stat().st_size > 0
+
+
+def test_generate_report_contains_metric_values(tmp_path):
+    out = tmp_path / "report.md"
+    generate_report(
+        _full_metrics_fixture(),
+        roc_path=str(tmp_path / "roc.png"),
+        cm_path=str(tmp_path / "cm.png"),
+        output_path=str(out),
+    )
+    content = out.read_text(encoding="utf-8")
+    for key in ("0.739", "0.6877", "0.7073", "0.6692", "0.2951"):
+        assert key in content
+    for cm_value in ("87", "86", "36", "43"):
+        assert cm_value in content
+
+
+def test_generate_report_embeds_plot_paths_as_relative(tmp_path):
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    out = reports_dir / "report.md"
+    roc = reports_dir / "roc.png"
+    cm  = reports_dir / "cm.png"
+    generate_report(
+        _full_metrics_fixture(),
+        roc_path=str(roc),
+        cm_path=str(cm),
+        output_path=str(out),
+    )
+    content = out.read_text(encoding="utf-8")
+    # PNGs sit next to the report -> markdown should use plain filenames, not absolute paths.
+    assert "![ROC Curve](roc.png)" in content
+    assert "![Confusion Matrix](cm.png)" in content
+
+
+def test_generate_report_includes_cv_section_when_folds_present(tmp_path):
+    out = tmp_path / "report.md"
+    generate_report(
+        _full_metrics_fixture(),
+        roc_path=str(tmp_path / "roc.png"),
+        cm_path=str(tmp_path / "cm.png"),
+        output_path=str(out),
+    )
+    content = out.read_text(encoding="utf-8")
+    assert "Validación cruzada" in content
+    assert "Fold 1" in content
+    assert "Fold 5" in content
+
+
+def test_generate_report_omits_cv_section_when_no_folds(tmp_path):
+    metrics = _full_metrics_fixture()
+    metrics.pop("cv_fold_scores")
+    metrics.pop("cv_auc_mean")
+    metrics.pop("cv_auc_std")
+    out = tmp_path / "report.md"
+    generate_report(
+        metrics,
+        roc_path=str(tmp_path / "roc.png"),
+        cm_path=str(tmp_path / "cm.png"),
+        output_path=str(out),
+    )
+    content = out.read_text(encoding="utf-8")
+    assert "Validación cruzada" not in content
+    # The other sections still render.
+    assert "Matriz de confusión" in content
+    assert "Curva ROC" in content
+
+
+def test_generate_report_creates_output_directory_if_missing(tmp_path):
+    out = tmp_path / "nested" / "sub" / "report.md"
+    generate_report(
+        _full_metrics_fixture(),
+        roc_path=str(tmp_path / "roc.png"),
+        cm_path=str(tmp_path / "cm.png"),
+        output_path=str(out),
+    )
+    assert out.exists()
