@@ -22,7 +22,7 @@ env/
 
 # Data (large files)
 data/raw/
-*.csv
+#*.csv
 *.tsv
 *.parquet
 *.h5
@@ -46,7 +46,7 @@ Thumbs.db
 *.log
 logs/
 
-models/*
+#models/*
 
 
 reports/*
