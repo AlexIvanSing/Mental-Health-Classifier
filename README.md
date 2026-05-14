@@ -253,6 +253,7 @@ python scripts/run_optimization_pipeline.py --n-trials 30
 # → produces reports/<variant>/* and reports/optimization_results.json
 
 # Stage 2: tune XGB on the winning variant (auto-detected from stage-1 results)
+# it has to be run as an administrator 
 python scripts/run_xgb_optimization.py --n-trials 30
 # → writes best model hyperparams (incl. early_stopping_rounds) to the winner's YAML
 # → checkpoints to reports/optuna_xgb_<winner>.journal

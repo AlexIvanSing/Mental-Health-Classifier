@@ -193,5 +193,84 @@
       "FP": 40,
       "FN": 41
     }
+  },
+  "xgb_optimization": {
+    "variant": "stemming",
+    "yaml_path": "configs/variant_stemming.yaml",
+    "n_trials": 30,
+    "best_cv_auc": 0.7796,
+    "best_params": {
+      "n_estimators": 373,
+      "max_depth": 10,
+      "learning_rate": 0.010797,
+      "subsample": 0.6372,
+      "colsample_bytree": 0.7661,
+      "gamma": 3.2486,
+      "min_child_weight": 3,
+      "reg_alpha": 2.722e-05,
+      "reg_lambda": 0.00100004
+    },
+    "fixed_keys": {
+      "scale_pos_weight": 0.93,
+      "eval_metric": "auc",
+      "random_state": 42,
+      "early_stopping_rounds": 30
+    },
+    "storage_path": "reports/optuna_xgb_stemming.journal",
+    "train": {
+      "cv_auc_mean": 0.7852,
+      "cv_auc_std": 0.0217,
+      "val_auc": 0.7255,
+      "val_AUC": 0.7255,
+      "val_F1": 0.6601,
+      "val_precision": 0.6779,
+      "val_recall": 0.6433,
+      "val_TPR": 0.6433,
+      "val_FPR": 0.3265
+    },
+    "test": {
+      "AUC": 0.7441,
+      "F1": 0.7333,
+      "precision": 0.7071,
+      "recall": 0.7615,
+      "TPR": 0.7615,
+      "FPR": 0.3361,
+      "TP": 99,
+      "TN": 81,
+      "FP": 41,
+      "FN": 31
+    },
+    "all_trial_scores": [
+      0.7589,
+      0.7506,
+      0.7506,
+      0.7719,
+      0.7696,
+      0.7722,
+      0.7741,
+      0.7497,
+      0.7615,
+      0.7754,
+      0.7698,
+      0.7786,
+      0.7688,
+      0.7763,
+      0.7712,
+      0.7699,
+      0.7693,
+      0.7682,
+      0.7764,
+      0.7724,
+      0.763,
+      0.7796,
+      0.7746,
+      0.779,
+      0.7708,
+      0.7732,
+      0.774,
+      0.7676,
+      0.7543,
+      0.779
+    ]
   }
 }
