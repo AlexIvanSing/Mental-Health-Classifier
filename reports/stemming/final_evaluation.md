@@ -6,18 +6,18 @@ _Generado: 2026-05-14 18:25_
 
 | Métrica | Valor |
 |---------|-------|
-| AUC | **0.7359** |
-| F1 | 0.6873 |
-| Precision | 0.6899 |
-| Recall (TPR) | 0.6846 |
-| FPR | 0.3279 |
+| AUC | **0.7441** |
+| F1 | 0.7333 |
+| Precision | 0.7071 |
+| Recall (TPR) | 0.7615 |
+| FPR | 0.3361 |
 
 ## Matriz de confusión
 
 | | Pred. Negativo | Pred. Positivo |
 |--|--|--|
-| **Real Negativo** | TN = 82 | FP = 40 |
-| **Real Positivo** | FN = 41 | TP = 89 |
+| **Real Negativo** | TN = 81 | FP = 41 |
+| **Real Positivo** | FN = 31 | TP = 99 |
 
 ## Curva ROC
 

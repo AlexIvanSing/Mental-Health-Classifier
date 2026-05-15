@@ -10,15 +10,18 @@ dist/
 build/
 .eggs/
 
+
 # Virtual environments
 venv/
 env/
 .env
 .venv
+myenv
 
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb_checkpoints
+
 
 # Data (large files)
 data/raw/
@@ -27,26 +30,32 @@ data/raw/
 *.parquet
 *.h5
 
+
 # Models (large binaries)
 models/*.bin
 models/*.pt
 models/*.pkl
 *.ckpt
 
+
 # IDE
 .vscode/
 .idea/
 *.swp
 
+
 # OS
 .DS_Store
 Thumbs.db
+
 
 # Logs
 *.log
 logs/
 
+
 #models/*
 
+.claude
 
 #reports/*

@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "PowerShell(.\\\\venv\\\\Scripts\\\\python.exe -m pytest tests/test_pipeline.py tests/test_evaluation.py tests/test_inference.py tests/test_vectorizer.py 2>&1)",
-      "Bash(python -c 'import json; d=json.load\\(open\\('\\\\''reports/optimization_results.json'\\\\''\\)\\); print\\('\\\\''Top-level keys:'\\\\'', list\\(d.keys\\(\\)\\)\\); *)"
-    ]
-  }
-}
