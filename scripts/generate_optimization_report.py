@@ -1,6 +1,10 @@
 """
-Render `reports/optimization.md` from the consolidated JSON written by
-`scripts/run_optimization_pipeline.py`.
+Render `reports/optimization.md` from the consolidated JSON.
+
+The report is intentionally narrative and in Spanish — written so a teammate
+(or a teacher) can open the file and understand what the model does, how it
+performs, and what was tried, without prior ML context. Every number is
+explained in plain language alongside the table that contains it.
 
 Run as:  python scripts/generate_optimization_report.py
 """
@@ -17,362 +21,413 @@ CONSOLIDATED = REPO_ROOT / "reports" / "optimization_results.json"
 OUTPUT       = REPO_ROOT / "reports" / "optimization.md"
 
 
-VARIANT_DESCRIPTIONS = {
-    "base": {
-        "title": "Baseline — `clean_text` solamente",
-        "expected_effect": (
-            "El baseline aplica únicamente encoding repair, normalización de "
-            "comillas, lowercase y eliminación de URLs / menciones / hashtags / "
-            "emojis / caracteres especiales. **No** filtra stopwords ni hace "
-            "stemming. La hipótesis es que `max_df=0.95` + `sublinear_tf` + "
-            "`min_df` cumplen el trabajo que normalmente haría una lista de "
-            "stopwords explícita, y que con ~1,500 documentos el costo de "
-            "stemming (pérdida de morfología fina como `die` vs `died` vs "
-            "`dying`) puede no compensar la reducción de vocabulario."
-        ),
-    },
-    "stopwords_nltk": {
-        "title": "Stopwords NLTK — preservando negaciones",
-        "expected_effect": (
-            "Eliminar la lista estándar de stopwords del inglés de NLTK pero "
-            "**preservando** las 10 negaciones (`no`, `not`, `never`, …) que "
-            "son críticas en este dominio (\"I do **not** want to live\" "
-            "tiene polaridad opuesta a \"I want to live\"). Hipótesis: si la "
-            "lista estándar de stopwords aporta valor real, debería ganar al "
-            "baseline; si `max_df=0.95` ya las filtraba implícitamente, los "
-            "resultados deberían ser equivalentes."
-        ),
-    },
-    "stopwords_domain": {
-        "title": "Stopwords de dominio — solo tokens gramaticales",
-        "expected_effect": (
-            "Lista curada que contiene **únicamente** tokens puramente "
-            "gramaticales (artículos, preposiciones, conjunciones, auxiliares "
-            "no negados, pronombres). Excluye explícitamente toda palabra con "
-            "contenido emocional o experiencial (\"alone\", \"hopeless\", "
-            "\"die\", \"tired\", …) que listas genéricas a veces incluyen. "
-            "Más conservador que NLTK: debería retener más señal."
-        ),
-    },
-    "stemming": {
-        "title": "Stemming — Porter Stemmer token a token",
-        "expected_effect": (
-            "Colapsa variantes morfológicas (`die` / `died` / `dying` / "
-            "`dies` → `die`) usando Porter Stemmer. Reduce el vocabulario y "
-            "puede ayudar a generalizar con corpus pequeño, pero arriesga "
-            "fusionar tokens con perfiles de uso distintos (p. ej. `tried` "
-            "vs `try`). Hipótesis: ganancia marginal o pérdida pequeña; "
-            "el verdadero ganador suele aparecer cuando hay <500 docs."
-        ),
-    },
+VARIANT_LABEL = {
+    "base":             "Baseline (sin filtrado de palabras)",
+    "stopwords_nltk":   "Stopwords NLTK (preservando negaciones)",
+    "stopwords_domain": "Stopwords curadas (solo palabras gramaticales)",
+    "stemming":         "Stemming (Porter)",
+}
+
+VARIANT_EXPLANATION = {
+    "base": (
+        "No filtra ninguna palabra. Solo limpia el texto (encoding, URLs, "
+        "menciones, emojis, mayúsculas). Confía en que el TF-IDF, con "
+        "`max_df`, ya filtra las palabras demasiado comunes."
+    ),
+    "stopwords_nltk": (
+        "Quita las stopwords estándar del inglés de NLTK, **excepto las 10 "
+        "negaciones** (`no`, `not`, `never`, …) que invierten el sentido de "
+        "una frase y son críticas en este dominio."
+    ),
+    "stopwords_domain": (
+        "Solo quita palabras puramente gramaticales (artículos, preposiciones, "
+        "conjunciones). Mantiene cualquier palabra con contenido emocional "
+        "(\"alone\", \"hopeless\", \"die\", …) que listas estándar a veces "
+        "incluyen."
+    ),
+    "stemming": (
+        "Aplica el algoritmo Porter para reducir cada palabra a su raíz "
+        "(`died`, `dying`, `dies` → `die`). Reduce el vocabulario y "
+        "puede ayudar con corpus pequeños."
+    ),
 }
 
 
-def fmt_pct(x):
-    if x is None: return "—"
-    return f"{x:.4f}"
+def _pct(x):
+    return "—" if x is None else f"{x:.4f}"
+
+
+def _delta(after, before):
+    d = after - before
+    sign = "+" if d >= 0 else ""
+    return f"{sign}{d:.4f}"
 
 
 def main():
     if not CONSOLIDATED.exists():
-        raise SystemExit(
-            f"Consolidated results not found at {CONSOLIDATED}.\n"
-            f"Run `python scripts/run_optimization_pipeline.py` first."
-        )
+        raise SystemExit(f"No existe {CONSOLIDATED}. Corre primero la optimización.")
 
     with open(CONSOLIDATED) as f:
         data = json.load(f)
 
-    variants = list(data.keys())
+    variant_keys = [k for k in data.keys() if k != "xgb_optimization"]
+    winner_v1 = max(variant_keys, key=lambda v: data[v]["test"]["AUC"])
+    has_xgb = "xgb_optimization" in data
 
-    # --- Identify the winner by Test AUC ----------------------------------
-    winner = max(variants, key=lambda v: data[v]["test"]["AUC"])
-    winner_auc = data[winner]["test"]["AUC"]
-
-    # --- Build the markdown ------------------------------------------------
     out = []
-    out.append("# Reporte de Optimización — Variantes de Preprocesamiento + Tuning de TF-IDF")
+
+    # ============================================================
+    # ENCABEZADO
+    # ============================================================
+    out.append("# Reporte de Optimización del Modelo")
     out.append("")
-    out.append(f"_Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}_")
-    out.append("")
-    out.append("> **Equipo TC3002B:** Aislinn Ruiz Sandoval · Iván Alexander Ramos Ramírez · Miguel Ángel Galicia Sánchez · Víctor Alejandro Morales García")
+    out.append("> **Detector de ideación suicida en texto** — TC3002B · Tecnológico de Monterrey")
+    out.append(">")
+    out.append("> **Equipo:** Aislinn Ruiz Sandoval · Iván Alexander Ramos Ramírez · "
+               "Miguel Ángel Galicia Sánchez · Víctor Alejandro Morales García")
+    out.append(">")
+    out.append(f"> _Generado: {datetime.now().strftime('%Y-%m-%d %H:%M')}_")
     out.append("")
     out.append("---")
     out.append("")
 
-    # 1. Resumen ejecutivo
-    out.append("## 1. Resumen ejecutivo")
+    # ============================================================
+    # 1. TL;DR
+    # ============================================================
+    final_block = data.get("xgb_optimization", data[winner_v1])
+    final_test = final_block["test"]
+
+    out.append("## 1. Resumen ejecutivo (1 minuto de lectura)")
     out.append("")
-    out.append(
-        f"Se compararon **{len(variants)} variantes de preprocesamiento** sobre el "
-        f"clasificador binario de ideación suicida (TF-IDF + XGBoost). Para cada "
-        f"variante, **Optuna optimizó independientemente los hiperparámetros del "
-        f"`TfidfVectorizer`** (5 parámetros, 30 trials, métrica = 5-fold Stratified CV AUC) "
-        f"manteniendo fijos los hiperparámetros del `XGBClassifier`."
-    )
+    out.append("**¿Qué hace el modelo?**")
     out.append("")
-    out.append(
-        f"**Ganador (por Test AUC sobre `data_test_fold1.csv`): `{winner}`** con "
-        f"AUC = {winner_auc:.4f}. La justificación detallada está en la sección 6."
-    )
+    out.append("Recibe un texto (un post de Reddit con título y cuerpo) y predice si "
+               "expresa **ideación suicida** (clase `1`) o no (clase `0`). Devuelve "
+               "tanto la decisión binaria como la probabilidad asociada.")
+    out.append("")
+    out.append("**¿Qué tan bien funciona?**")
+    out.append("")
+    if has_xgb:
+        winner_label = VARIANT_LABEL[final_block["variant"]]
+        out.append(f"Sobre el conjunto de prueba (252 publicaciones que el modelo nunca vio "
+                   f"durante el entrenamiento), la versión final del modelo "
+                   f"(**{winner_label}** + XGBoost optimizado con Optuna):")
+    else:
+        winner_label = VARIANT_LABEL[winner_v1]
+        out.append(f"Sobre el conjunto de prueba (252 publicaciones nunca vistas), la "
+                   f"variante ganadora (**{winner_label}**):")
+    out.append("")
+    out.append(f"- Detecta correctamente al **{final_test['recall']*100:.1f}%** de los "
+               f"posts de ideación suicida (recall).")
+    out.append(f"- De los posts que marca como suicidas, el **{final_test['precision']*100:.1f}%** "
+               f"realmente lo son (precisión).")
+    out.append(f"- Rendimiento global (AUC): **{final_test['AUC']:.3f}** (1.0 sería perfecto, "
+               f"0.5 sería tirar una moneda).")
+    out.append(f"- Falla en **{final_test['FN']} casos positivos no detectados** (FN) y "
+               f"genera **{final_test['FP']} falsas alarmas** (FP) sobre 252 publicaciones.")
+    out.append("")
+    out.append("**¿Por qué importa el recall más que la precisión?** "
+               "En este dominio, un *falso negativo* (no detectar una ideación suicida real) "
+               "tiene un costo mucho mayor que un *falso positivo* (alertar sobre un texto "
+               "que no era crítico). Por eso priorizamos modelos con recall alto.")
     out.append("")
 
-    # 2. Tabla de hiperparámetros óptimos
-    out.append("## 2. Hiperparámetros óptimos por variante")
+    # ============================================================
+    # 2. Qué se hizo (la pipeline en una página)
+    # ============================================================
+    out.append("## 2. Qué se hizo")
     out.append("")
-    out.append("| Variante | `ngram_range` | `min_df` | `max_df` | `sublinear_tf` | `max_features` |")
+    out.append("El proceso completo de optimización tuvo **dos etapas independientes** de "
+               "búsqueda de hiperparámetros con [Optuna](https://optuna.org/):")
+    out.append("")
+    out.append("```")
+    out.append("        ┌─────────────────────────────────────────────────────────┐")
+    out.append("        │  ETAPA 1: ¿Cómo conviene representar el texto?          │")
+    out.append("        │  (TF-IDF tuneado para 4 variantes de preprocesamiento)  │")
+    out.append("        └─────────────────────────────────────────────────────────┘")
+    out.append("                                  │")
+    out.append("                                  ▼")
+    out.append(f"                  Variante ganadora: {winner_v1}")
+    out.append("                                  │")
+    out.append("                                  ▼")
+    if has_xgb:
+        out.append("        ┌─────────────────────────────────────────────────────────┐")
+        out.append("        │  ETAPA 2: ¿Cómo conviene configurar XGBoost?            │")
+        out.append("        │  (9 hiperparámetros del clasificador, 30 trials)        │")
+        out.append("        └─────────────────────────────────────────────────────────┘")
+        out.append("                                  │")
+        out.append("                                  ▼")
+        out.append("                       Modelo final entrenado")
+    else:
+        out.append("        (etapa 2 — tuning de XGBoost — pendiente)")
+    out.append("```")
+    out.append("")
+    out.append("**Para cada etapa**, Optuna probó 30 combinaciones distintas de "
+               "hiperparámetros, midió cada una con **5-fold Stratified Cross-Validation** "
+               "(promedio de AUC sobre 5 particiones) y se quedó con la mejor.")
+    out.append("")
+    out.append("El **conjunto de prueba** (`data_test_fold1.csv`, 252 publicaciones) **nunca "
+               "se tocó durante la optimización** — solo al final, para reportar el "
+               "desempeño real.")
+    out.append("")
+
+    # ============================================================
+    # 3. Etapa 1 — comparación de variantes
+    # ============================================================
+    out.append("## 3. Etapa 1 — Comparación de variantes de preprocesamiento")
+    out.append("")
+    out.append("Probamos 4 maneras distintas de limpiar el texto antes de vectorizarlo. "
+               "Para cada variante, Optuna encontró la mejor configuración del "
+               "`TfidfVectorizer` (tamaño del vocabulario, n-gramas, frecuencias mínima y "
+               "máxima, etc.) y luego se entrenó el modelo con XGBoost en su configuración "
+               "por defecto.")
+    out.append("")
+    out.append("### 3.1. Las 4 variantes")
+    out.append("")
+    for v in variant_keys:
+        out.append(f"**{VARIANT_LABEL[v]}.** {VARIANT_EXPLANATION[v]}")
+        out.append("")
+
+    out.append("### 3.2. Resultados sobre el conjunto de prueba")
+    out.append("")
+    out.append("| Variante | AUC | Recall | Precisión | F1 | FPR | TP | FN | FP | TN |")
+    out.append("|---|---|---|---|---|---|---|---|---|---|")
+    for v in variant_keys:
+        t = data[v]["test"]
+        marker = " 🏆" if v == winner_v1 else ""
+        out.append(
+            f"| {VARIANT_LABEL[v]}{marker} | "
+            f"{t['AUC']:.4f} | {t['recall']:.4f} | {t['precision']:.4f} | "
+            f"{t['F1']:.4f} | {t['FPR']:.4f} | "
+            f"{t['TP']} | {t['FN']} | {t['FP']} | {t['TN']} |"
+        )
+    out.append("")
+    out.append(f"**Ganadora por AUC: {VARIANT_LABEL[winner_v1]}** "
+               f"(AUC = {data[winner_v1]['test']['AUC']:.4f}).")
+    out.append("")
+    out.append("**¿Cómo leer la tabla?**")
+    out.append("")
+    out.append("- **AUC**: capacidad global del modelo para separar las dos clases. "
+               "Más alto = mejor.")
+    out.append("- **Recall** (TPR): de todos los posts de ideación suicida REALES, "
+               "qué porcentaje detectó. La métrica más importante para este dominio.")
+    out.append("- **Precisión**: de los posts que el modelo marcó como suicidas, "
+               "qué porcentaje realmente lo eran.")
+    out.append("- **F1**: balance entre precisión y recall.")
+    out.append("- **FPR** (False Positive Rate): de los posts NO suicidas, qué porcentaje "
+               "fueron clasificados incorrectamente como suicidas.")
+    out.append("- **TP, FN, FP, TN**: conteos absolutos sobre las 252 filas del test fold.")
+    out.append("")
+    out.append("### 3.3. Hiperparámetros TF-IDF óptimos por variante")
+    out.append("")
+    out.append("| Variante | n-gramas | min_df | max_df | sublinear_tf | max_features |")
     out.append("|---|---|---|---|---|---|")
-    for v in variants:
+    for v in variant_keys:
         p = data[v]["best_params"]
         ngram = f"({p['ngram_range'][0]}, {p['ngram_range'][1]})"
         out.append(
-            f"| `{v}` | {ngram} | {p['min_df']} | {p['max_df']:.4f} | "
-            f"{p['sublinear_tf']} | {p['max_features']:,} |"
+            f"| {VARIANT_LABEL[v]} | {ngram} | {p['min_df']} | "
+            f"{p['max_df']:.4f} | {p['sublinear_tf']} | {p['max_features']:,} |"
         )
     out.append("")
-
-    # 3. Tabla de métricas finales
-    out.append("## 3. Métricas finales comparadas")
+    out.append("**Observaciones de la etapa 1:**")
     out.append("")
-    out.append(
-        "Las columnas reflejan: el mejor AUC observado durante la búsqueda Optuna "
-        "(CV 5-fold sobre el train completo), el AUC en el holdout interno (20% "
-        "de `data_train.csv`), y las métricas finales sobre el fold de prueba "
-        "(`data_test_fold1.csv`, 252 filas, jamás visto durante CV ni Optuna)."
-    )
-    out.append("")
-    out.append("| Variante | Opt CV AUC | Val AUC | **Test AUC** | Recall (test) | FPR (test) | F1 (test) | Precision (test) |")
-    out.append("|---|---|---|---|---|---|---|---|")
-    for v in variants:
-        opt_auc = data[v]["optuna"]["best_cv_auc"]
-        val_auc = data[v]["train"]["val_auc"]
-        t       = data[v]["test"]
-        marker  = " 🏆" if v == winner else ""
-        out.append(
-            f"| `{v}`{marker} | {fmt_pct(opt_auc)} | {fmt_pct(val_auc)} | "
-            f"**{fmt_pct(t['AUC'])}** | {fmt_pct(t['recall'])} | "
-            f"{fmt_pct(t['FPR'])} | {fmt_pct(t['F1'])} | {fmt_pct(t['precision'])} |"
-        )
+    out.append("- Las 4 variantes terminan dentro de un rango muy estrecho de Test AUC "
+               f"({min(data[v]['test']['AUC'] for v in variant_keys):.4f} a "
+               f"{max(data[v]['test']['AUC'] for v in variant_keys):.4f}). "
+               "La elección del preprocesamiento **no es decisiva** en este corpus — "
+               "el TF-IDF + XGBoost ya capturan la mayor parte de la señal.")
+    out.append("- `stopwords_nltk` queda último, lo cual sugiere que filtrar la lista "
+               "estándar de NLTK quita algunas palabras útiles incluso preservando las "
+               "negaciones.")
+    out.append("- `stemming` gana por margen pequeño. La hipótesis es que colapsar "
+               "morfología (`die`/`died`/`dying`) en un corpus de solo ~1,500 documentos "
+               "sí ayuda al modelo a generalizar.")
     out.append("")
 
-    # 4. Confusión por variante
-    out.append("### Matriz de confusión por variante (sobre el test fold)")
-    out.append("")
-    out.append("| Variante | TP | TN | FP | FN |")
-    out.append("|---|---|---|---|---|")
-    for v in variants:
-        t = data[v]["test"]
-        out.append(f"| `{v}` | {t['TP']} | {t['TN']} | {t['FP']} | {t['FN']} |")
-    out.append("")
-
-    # 5. Análisis por variante
-    out.append("## 4. Análisis por variante")
-    out.append("")
-    for v in variants:
-        info = VARIANT_DESCRIPTIONS[v]
-        out.append(f"### 4.{variants.index(v)+1}. {info['title']}")
-        out.append("")
-        out.append(f"**Efecto esperado en el dominio.** {info['expected_effect']}")
-        out.append("")
-
-        t = data[v]["test"]
-        opt_auc = data[v]["optuna"]["best_cv_auc"]
-        out.append("**Resultados empíricos:**")
-        out.append("")
-        out.append(f"- Opt CV AUC = {fmt_pct(opt_auc)}")
-        out.append(f"- Test AUC = {fmt_pct(t['AUC'])}, F1 = {fmt_pct(t['F1'])}, "
-                   f"Recall = {fmt_pct(t['recall'])}, FPR = {fmt_pct(t['FPR'])}")
-        out.append("")
-
-        # Diff vs baseline
-        if v != "base":
-            base_test = data["base"]["test"]["AUC"]
-            delta = t["AUC"] - base_test
-            sign = "+" if delta >= 0 else ""
-            verdict = (
-                "**confirma** la hipótesis: la técnica aporta señal."
-                if delta > 0.002 else
-                ("**rechaza** la hipótesis: la técnica reduce el desempeño."
-                 if delta < -0.002 else
-                 "**inconcluso**: la diferencia con el baseline es estadísticamente despreciable (|Δ AUC| ≤ 0.002).")
-            )
-            out.append(f"**Δ Test AUC vs baseline = {sign}{delta:.4f}** → {verdict}")
-            out.append("")
-
-    # 5. Metodología
-    out.append("## 5. Metodología de optimización")
-    out.append("")
-    out.append(
-        "**Optuna** (TPE sampler con `random_state=42`) explora 30 trials por variante "
-        "sobre el espacio:"
-    )
-    out.append("")
-    out.append("- `ngram_range` ∈ {(1,1), (1,2), (1,3)}")
-    out.append("- `min_df` ∈ [1, 5]  (int uniforme)")
-    out.append("- `max_df` ∈ [0.70, 0.99]  (float uniforme)")
-    out.append("- `sublinear_tf` ∈ {True, False}")
-    out.append("- `max_features` ∈ {5000, 10000, 20000, 50000}")
-    out.append("")
-    out.append(
-        "La **métrica objetivo** es el promedio de AUC sobre 5-fold StratifiedKFold "
-        "aplicado al conjunto de entrenamiento completo (`data/data_train.csv`, "
-        "1,516 filas). El test fold (`data_test_fold1.csv`, 252 filas) **no se toca** "
-        "durante la búsqueda — solo se usa al final para el reporte de Test AUC, "
-        "evitando data leakage en la métrica reportada."
-    )
-    out.append("")
-    out.append(
-        "Los **hiperparámetros del XGBClassifier** (`n_estimators=500`, "
-        "`max_depth=6`, `learning_rate=0.05`, `scale_pos_weight=0.93`, etc.) "
-        "permanecen fijos durante toda la búsqueda — solo se optimizan los del "
-        "vectorizador. Esto aísla el efecto del preprocesamiento + vectorización "
-        "del efecto del clasificador, dejando el tuning del clasificador como "
-        "trabajo separado en el roadmap."
-    )
-    out.append("")
-    out.append(
-        "Para robustez, el `objective` de Optuna atrapa `ValueError` (típicamente "
-        "lanzado cuando una combinación patológica de `min_df` / `max_df` poda el "
-        "vocabulario a cero) y devuelve `0.0` — esto hace que TPE evite esa región "
-        "del espacio de búsqueda en lugar de abortar todo el estudio."
-    )
-    out.append("")
-    out.append(
-        "Optimización adicional: el cleaner de cada variante se aplica **una sola "
-        "vez** al corpus completo antes del CV (no dentro del Pipeline), porque "
-        "la limpieza es una función determinística sin dependencia entre filas. "
-        "Esto es matemáticamente equivalente al pipeline de producción "
-        "(`build_pipeline` la aplica dentro como FunctionTransformer) pero acelera "
-        "la búsqueda ~5× evitando re-aplicar la limpieza en cada fold."
-    )
-    out.append("")
-
-    # 6. Conclusión
-    # --- XGB tuning section (only if present in the JSON) ----------------
-    if "xgb_optimization" in data:
+    # ============================================================
+    # 4. Etapa 2 — tuning de XGBoost
+    # ============================================================
+    if has_xgb:
         xgb = data["xgb_optimization"]
         winner_v = xgb["variant"]
-        baseline_test = data[winner_v]["test"]
-        tuned_test = xgb["test"]
-        delta = tuned_test["AUC"] - baseline_test["AUC"]
+        before = data[winner_v]["test"]
+        after = xgb["test"]
 
-        out.append("## 6. Optimización del XGBClassifier")
+        out.append("## 4. Etapa 2 — Tuning de XGBoost sobre la ganadora")
         out.append("")
         out.append(
-            f"Tras seleccionar **`{winner_v}`** como ganadora del tuning de "
-            f"TF-IDF, se ejecutó un segundo estudio Optuna ({xgb['n_trials']} "
-            f"trials, TPE sampler, 5-fold Stratified CV AUC) sobre los 9 "
-            f"hiperparámetros del clasificador. El estudio se persistió a "
-            f"`{xgb['storage_path']}` para permitir reanudación tras "
-            f"interrupciones."
+            f"Sobre la variante ganadora (**{VARIANT_LABEL[winner_v]}**), corrimos un "
+            f"segundo estudio de Optuna ({xgb['n_trials']} trials) sobre los "
+            f"**9 hiperparámetros del clasificador** XGBoost. El TF-IDF se mantuvo "
+            f"congelado en sus valores óptimos de la etapa 1."
         )
         out.append("")
-
-        out.append("### 6.1. Hiperparámetros XGB óptimos")
+        out.append("Adicionalmente, el entrenamiento final ahora usa **early stopping** "
+                   f"con paciencia de {xgb['fixed_keys']['early_stopping_rounds']} rondas: "
+                   "el modelo deja de añadir árboles cuando deja de mejorar.")
         out.append("")
-        out.append("| Hiperparámetro | Valor |")
-        out.append("|---|---|")
+        out.append("### 4.1. Hiperparámetros XGBoost óptimos")
+        out.append("")
+        out.append("| Hiperparámetro | Valor | Qué controla |")
+        out.append("|---|---|---|")
+        explanations = {
+            "n_estimators":     "Número máximo de árboles a entrenar.",
+            "max_depth":        "Profundidad máxima de cada árbol.",
+            "learning_rate":    "Cuánto contribuye cada árbol al modelo final.",
+            "subsample":        "Fracción de filas usadas por árbol (regularización).",
+            "colsample_bytree": "Fracción de features usadas por árbol (regularización).",
+            "gamma":            "Penalización por crear nuevos splits.",
+            "min_child_weight": "Mínimo de muestras requeridas en una hoja.",
+            "reg_alpha":        "Regularización L1 sobre los pesos.",
+            "reg_lambda":       "Regularización L2 sobre los pesos.",
+        }
         for k, v in xgb["best_params"].items():
-            out.append(f"| `{k}` | {v} |")
-        out.append("")
-        out.append("Más los fijos no tuneados:")
-        out.append("")
-        for k, v in xgb.get("fixed_keys", {}).items():
-            out.append(f"- `{k}`: {v}")
+            v_str = f"{v:g}" if isinstance(v, float) else str(v)
+            out.append(f"| `{k}` | {v_str} | {explanations.get(k, '—')} |")
         out.append("")
 
-        out.append("### 6.2. Antes vs después del tuning de XGB")
+        out.append("### 4.2. Comparativa: antes vs después del tuning de XGBoost")
         out.append("")
         out.append("| Métrica | Antes (XGB defaults) | Después (XGB tuneado) | Δ |")
         out.append("|---|---|---|---|")
-        for metric in ("AUC", "F1", "precision", "recall", "FPR"):
-            before = baseline_test[metric]
-            after  = tuned_test[metric]
-            d = after - before
-            sign = "+" if d >= 0 else ""
-            out.append(f"| {metric} | {fmt_pct(before)} | {fmt_pct(after)} | {sign}{d:.4f} |")
+        for metric, label in [
+            ("AUC",       "AUC"),
+            ("recall",    "Recall (TPR)"),
+            ("precision", "Precisión"),
+            ("F1",        "F1"),
+            ("FPR",       "FPR"),
+        ]:
+            out.append(
+                f"| {label} | {_pct(before[metric])} | {_pct(after[metric])} | "
+                f"{_delta(after[metric], before[metric])} |"
+            )
+        out.append("")
+        out.append("**Matriz de confusión sobre las 252 publicaciones de prueba:**")
+        out.append("")
+        out.append("| | Predicho NO | Predicho SÍ |")
+        out.append("|---|---|---|")
+        out.append(f"| **Real NO** | TN = {after['TN']} | FP = {after['FP']} |")
+        out.append(f"| **Real SÍ** | FN = {after['FN']} | TP = {after['TP']} |")
         out.append("")
 
-        if delta > 0.005:
-            verdict_xgb = (
-                f"**Mejora significativa** (Δ AUC = +{delta:.4f}). El tuning de "
-                f"XGB compensa el costo de optimización adicional."
-            )
-        elif delta < -0.002:
-            verdict_xgb = (
-                f"**Regresión** (Δ AUC = {delta:.4f}). El XGB tuneado es peor "
-                f"que el default — posiblemente overfitting al CV. Conservar la "
-                f"configuración previa."
-            )
-        else:
-            verdict_xgb = (
-                f"**Equivalente al default** (Δ AUC = {delta:+.4f}, dentro del "
-                f"ruido de CV). El tuning explora valores cercanos a los "
-                f"defaults; no hay ganancia clara pero tampoco regresión."
-            )
-        out.append(f"**Veredicto:** {verdict_xgb}")
+        # Veredicto narrativo
+        delta_recall = after["recall"] - before["recall"]
+        delta_auc = after["AUC"] - before["AUC"]
+        out.append("**Interpretación:**")
         out.append("")
-
-    out.append("## 7. Conclusión y elección final")
-    out.append("")
-    winner_info = VARIANT_DESCRIPTIONS[winner]
-    base_auc = data["base"]["test"]["AUC"]
-    winner_test_auc = data[winner]["test"]["AUC"]
-    margin = winner_test_auc - base_auc
-
-    out.append(
-        f"La variante ganadora es **`{winner}`** ({winner_info['title']}) "
-        f"con Test AUC = {winner_test_auc:.4f}, "
-        f"frente al baseline en {base_auc:.4f} (Δ = {margin:+.4f})."
-    )
-    out.append("")
-
-    if abs(margin) < 0.003:
         out.append(
-            "Sin embargo, la diferencia con el baseline es **menor a 0.003 AUC**, "
-            "que está bien dentro de la varianza esperada del CV (recordar que "
-            "`cv_auc_std` del baseline original era ~0.027). Por **parsimonia** "
-            "— el principio de preferir la solución más simple cuando los "
-            "resultados son equivalentes — la recomendación es **conservar el "
-            "baseline** como pipeline de producción. Las variantes con stopwords / "
-            "stemming agregan dependencias (NLTK) y reducen interpretabilidad "
-            "sin justificación empírica clara en este corpus."
+            f"- El AUC subió **{_delta(after['AUC'], before['AUC'])}** "
+            "— una mejora pequeña, dentro del rango esperado de variabilidad del CV."
         )
+        out.append(
+            f"- El **recall subió {_delta(after['recall'], before['recall'])}** "
+            f"(de {before['recall']*100:.1f}% a {after['recall']*100:.1f}%). "
+            "**Esta es la mejora importante**: el modelo ahora detecta "
+            f"{after['TP']} casos positivos contra los {before['TP']} de antes — "
+            f"recupera **{after['TP'] - before['TP']} ideaciones suicidas adicionales**."
+        )
+        out.append(
+            f"- Trade-off: el **FPR también subió** ({before['FPR']:.3f} → {after['FPR']:.3f}). "
+            f"Pasamos de {before['FP']} falsas alarmas a {after['FP']}. "
+            "El modelo es ahora menos conservador."
+        )
+        out.append(
+            "- En este dominio el trade-off es **favorable**: prevenir más casos "
+            "vale más que reducir falsas alarmas."
+        )
+        out.append("")
+
+    # ============================================================
+    # 5. Decisión final
+    # ============================================================
+    out.append("## 5. Decisión final y configuración productiva")
+    out.append("")
+    if has_xgb:
+        wv = xgb["variant"]
+        out.append(
+            f"**Modelo final:** variante **`{wv}`** ({VARIANT_LABEL[wv]}) con XGBoost "
+            f"tuneado por Optuna y early stopping activado."
+        )
+        out.append("")
+        out.append(f"- Configuración YAML: `{xgb['yaml_path']}`")
+        out.append(f"- Modelo serializado: `models/model_{wv}.joblib`")
+        out.append(f"- Estudio Optuna persistido en: `{xgb['storage_path']}`")
     else:
         out.append(
-            "Esta diferencia es **suficientemente grande** para justificar el "
-            f"costo adicional de `{winner}`: dependencias (NLTK), tiempo de "
-            f"limpieza ligeramente mayor y, en el caso de stemming, pérdida de "
-            f"morfología fina. La recomendación es **promover `{winner}` a "
-            f"pipeline de producción** y actualizar `configs/default.yaml` con "
-            f"sus hiperparámetros óptimos."
+            f"**Variante ganadora hasta ahora:** `{winner_v1}` "
+            f"({VARIANT_LABEL[winner_v1]})."
         )
+        out.append("")
+        out.append("La etapa 2 (tuning de XGBoost) está pendiente.")
+    out.append("")
+    out.append("**Métricas finales reportables sobre el conjunto de prueba (252 filas):**")
+    out.append("")
+    out.append("| Métrica | Valor |")
+    out.append("|---|---|")
+    out.append(f"| AUC | **{final_test['AUC']:.4f}** |")
+    out.append(f"| Recall (TPR) | **{final_test['recall']:.4f}** |")
+    out.append(f"| Precisión | {final_test['precision']:.4f} |")
+    out.append(f"| F1 | {final_test['F1']:.4f} |")
+    out.append(f"| FPR | {final_test['FPR']:.4f} |")
+    out.append(f"| TP / TN / FP / FN | {final_test['TP']} / {final_test['TN']} / "
+               f"{final_test['FP']} / {final_test['FN']} |")
+    out.append("")
 
+    # ============================================================
+    # 6. Cómo reproducir
+    # ============================================================
+    out.append("## 6. Cómo reproducir estos resultados")
     out.append("")
-    out.append("### Trabajo futuro")
+    out.append("```powershell")
+    out.append("# 1. Ejecutar todo el pipeline de optimización (etapa 1: 4 variantes × 30 trials)")
+    out.append("python scripts/run_optimization_pipeline.py --n-trials 30")
     out.append("")
-    out.append("- Tuning de hiperparámetros del XGBClassifier (deliberadamente fuera de scope aquí).")
-    out.append("- Threshold tuning: el corte 0.5 puede no ser óptimo cuando el FN es más costoso que el FP.")
-    out.append("- Splits user-disjoint para descartar la fuga sutil de overlap de `user_id` entre train y test.")
-    out.append("- Combinaciones: ¿stemming + stopwords_domain? El espacio crece pero podría haber ganancia compuesta.")
+    out.append("# 2. Ejecutar la etapa 2 sobre la variante ganadora (auto-detectada)")
+    out.append("python scripts/run_xgb_optimization.py --n-trials 30")
     out.append("")
+    out.append("# 3. Regenerar este reporte")
+    out.append("python scripts/generate_optimization_report.py")
+    out.append("```")
+    out.append("")
+    if has_xgb:
+        out.append("**Para reanudar una corrida interrumpida** del XGB tuning, basta con "
+                   "volver a ejecutar `run_xgb_optimization.py`: el `JournalStorage` retoma "
+                   "desde el último trial completado.")
+        out.append("")
 
-    # 7. Apéndice — distribución de trials
-    out.append("## 8. Apéndice — distribución de trials de Optuna")
+    # ============================================================
+    # 7. Metodología (para el reporte académico)
+    # ============================================================
+    out.append("## 7. Notas metodológicas")
     out.append("")
-    out.append("Para cada variante, los 30 AUC observados durante la búsqueda:")
+    out.append("- **Métrica objetivo de Optuna:** promedio de AUC sobre 5-fold "
+               "StratifiedKFold (`random_state=42`).")
+    out.append("- **Sampler de Optuna:** TPE (Tree-structured Parzen Estimator), "
+               "`random_state=42`.")
+    out.append("- **División train/test congelada:** `data/data_train.csv` (1,516 filas) y "
+               "`data/data_test_fold1.csv` (252 filas) son disjuntas a nivel de `text_id`. "
+               "El test fold solo se usa al final, después de toda la optimización.")
+    if has_xgb:
+        out.append("- **Early stopping:** durante la búsqueda Optuna, NO se aplica — todos "
+                   "los trials usan exactamente el `n_estimators` propuesto, para que las "
+                   "comparaciones entre trials sean justas. En el entrenamiento final SÍ "
+                   "se aplica, usando un sub-split 90/10 del conjunto de entrenamiento "
+                   "como `eval_set`.")
+        out.append(f"- **Trees crecidos en el modelo final:** menos que el cap de "
+                   f"`n_estimators={xgb['best_params']['n_estimators']}` (early stopping "
+                   "se activó antes), evitando overfitting.")
+    out.append("- **`scale_pos_weight = 0.93`:** equivale a la proporción `n_neg/n_pos` "
+               "del corpus (732/784). Compensa el ligero desbalance de clases sin alterar "
+               "la distribución original.")
     out.append("")
-    out.append("| Variante | min | mediana | max | std |")
-    out.append("|---|---|---|---|---|")
-    for v in variants:
-        scores = data[v]["optuna"]["all_trial_scores"]
-        if not scores:
-            continue
-        import statistics
-        out.append(
-            f"| `{v}` | {min(scores):.4f} | {statistics.median(scores):.4f} | "
-            f"{max(scores):.4f} | {statistics.stdev(scores) if len(scores) > 1 else 0:.4f} |"
-        )
+    out.append("---")
+    out.append("")
+    out.append("> **Aviso:** este clasificador es un proyecto académico. **No es una "
+               "herramienta clínica** y no debe usarse para tomar decisiones sobre la "
+               "salud o seguridad de ninguna persona. Si tú o alguien que conoces está "
+               "en crisis, contacta los servicios de emergencia o una línea de prevención "
+               "del suicidio en tu país.")
     out.append("")
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)

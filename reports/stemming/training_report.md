@@ -1,6 +1,6 @@
 # Reporte de Entrenamiento — Detección de Ideación Suicida
 
-_Generado: 2026-05-14 17:15_
+_Generado: 2026-05-14 18:24_
 
 ## Métricas sobre el conjunto de prueba
 

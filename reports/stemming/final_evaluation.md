@@ -1,6 +1,6 @@
 # Reporte de Evaluación — Detección de Ideación Suicida (Test Fold)
 
-_Generado: 2026-05-14 17:15_
+_Generado: 2026-05-14 18:25_
 
 ## Métricas sobre el conjunto de prueba
 
