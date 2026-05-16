@@ -1,0 +1,48 @@
+data:
+  train_path: data/data_train.csv
+  test_path: data/data_test_fold1.csv
+  expected_columns:
+  - user_id
+  - text_id
+  - title
+  - text
+  - is_suicide
+  text_columns:
+  - title
+  - text
+  target_column: is_suicide
+  value_true: 'yes'
+  value_false: 'no'
+preprocessing:
+  variant: stemming
+paths:
+  model_output: models/model_stemming.joblib
+  reports_dir: reports/stemming
+  roc_val_output: reports/stemming/roc_curve_val.png
+  cm_val_output: reports/stemming/confusion_matrix_val.png
+  metrics_val_output: reports/stemming/training_metrics.json
+  report_val_output: reports/stemming/training_report.md
+  roc_test_output: reports/stemming/roc_curve_test.png
+  cm_test_output: reports/stemming/confusion_matrix_test.png
+  metrics_test_output: reports/stemming/test_metrics.json
+  report_test_output: reports/stemming/final_evaluation.md
+vectorizer:
+  ngram_range:
+  - 1
+  - 1
+  min_df: 1
+  max_df: 0.8093
+  sublinear_tf: false
+  max_features: 20000
+model:
+  class: xgboost.XGBClassifier
+  n_estimators: 500
+  max_depth: 6
+  learning_rate: 0.05
+  eval_metric: auc
+  random_state: 42
+  scale_pos_weight: 0.93
+training:
+  test_size: 0.2
+  random_state: 42
+  n_splits: 5

@@ -1,6 +1,6 @@
 # Mental Health Classifier — Detección de Ideación Suicida
 
-> Clasificador binario de texto que identifica ideación suicida en publicaciones tipo Reddit (título + cuerpo). Construido sobre un pipeline reproducible de scikit-learn con XGBoost, e incluye CLI end-to-end para entrenamiento, evaluación contra un fold de prueba etiquetado, e inferencia ciega — más optimización en dos etapas con Optuna (TF-IDF + XGBoost), estudios checkpoint-ables, y reportes markdown auto-generados.
+> Clasificador binario de texto que identifica ideación suicida en publicaciones tipo Reddit (título + cuerpo). Construido sobre un pipeline reproducible de scikit-learn con soporte multi-modelo (XGBoost, SVM, Logistic Regression), e incluye CLI end-to-end para entrenamiento, evaluación contra un fold de prueba etiquetado, e inferencia ciega — más optimización en dos etapas con Optuna (TF-IDF + modelo), estudios checkpoint-ables con journals resumibles, y reportes markdown auto-generados con tabla comparativa de modelos.
 
 ---
 
@@ -29,7 +29,7 @@ Este repositorio implementa un pipeline de machine learning end-to-end para la t
 - **Reproducible** — todo hiperparámetro, ruta y split vive en archivos YAML bajo `configs/`. No hay números mágicos en el código.
 - **Modular** — ingesta, preprocesamiento, vectorización, modelo, evaluación, reporte y optimización son módulos independientes, cada uno con tests unitarios.
 - **Preprocesamiento configurable** — cuatro variantes de limpieza de texto intercambiables (`base`, `stopwords_nltk`, `stopwords_domain`, `stemming`) seleccionadas vía la config YAML. Cada una puede compararse A/B contra las demás.
-- **Tuning en dos etapas con Optuna** — primero los hiperparámetros del TF-IDF se tunean independientemente por variante; luego los hiperparámetros de XGBoost se tunean sobre la variante ganadora. Los estudios persisten a disco para que un proceso interrumpido se reanude desde donde se quedó.
+- **Tuning en dos etapas con Optuna** — primero los hiperparámetros del TF-IDF se tunean independientemente por variante; luego los hiperparámetros de cada modelo (XGBoost, SVM, LR) se tunean sobre la variante ganadora. Todos los estudios persisten a disco con `JournalStorage` para que un proceso interrumpido se reanude desde donde se quedó.
 - **CLI-driven** — tres subcomandos cubren el ciclo del día a día (`train`, `evaluate`, `predict`); dos scripts orquestan el ciclo de optimización.
 - **Train/serve consistente** — la limpieza del texto vive **dentro** del `Pipeline` de sklearn como un `FunctionTransformer` serializable, así que la misma transformación corre en entrenamiento e inferencia. Sin desviaciones (skew), independientemente de la variante.
 - **Runs auto-documentados** — cada invocación de entrenamiento y evaluación deja en disco JSON con métricas + PNG con curva ROC + PNG con matriz de confusión + un reporte `*.md` dentro de una carpeta específica de la variante bajo `reports/`. Las corridas de optimización también producen un reporte comparativo unificado.
@@ -64,26 +64,26 @@ El alcance es académico (TC3002B, Tecnológico de Monterrey) pero la estructura
    │      ↓       │   predict + predict_proba  predict + proba       mejores hiper-
    │ TfidfVect    │         │                       │                params en su YAML
    │      ↓       │         ▼                       ▼              
-   │ XGBClassif   │   evaluation.evaluate     write CSV            Etapa 2: XGB
+   │ Classifier   │   evaluation.evaluate     write CSV            Etapa 2: Modelos
    └──────────────┘   + generate_report        (text_id,           ──────────────
         │                   │                  prediction,         pick_winner_variant()
         ▼                   ▼                  probability)        → carga YAML ganador
-   StratifiedKFold     reports/<variant>/                          optimize_xgb
-   CV + holdout fit    ├─ roc_curve_test.png                        → 30 trials
-        │              ├─ confusion_matrix_test.png                 → checkpoint en
-        ▼              ├─ test_metrics.json                            JournalStorage
-   joblib.dump         └─ final_evaluation.md                       → progreso impreso
-        │                                                              por trial
-        ▼                                                           → escribe XGB
-   evaluation.evaluate                                                hiperparams en
-   + generate_report                                                  YAML ganador
-        │                                                              + early stopping
-        ▼                                                            
-   reports/<variant>/                                              Train+evaluate final
-   ├─ roc_curve_val.png                                            con pipeline tuneado,
-   ├─ confusion_matrix_val.png                                     reports/optimization.md
-   ├─ training_metrics.json                                        renderiza la
-   └─ training_report.md                                           comparación.
+   StratifiedKFold     reports/<variant>/                          Para cada modelo:
+   CV + holdout fit    ├─ roc_curve_test.png                        optimize_xgb (9 dims)
+        │              ├─ confusion_matrix_test.png                  optimize_model(SVM)
+        ▼              ├─ test_metrics.json                          optimize_model(LR)
+   joblib.dump         └─ final_evaluation.md                       → JournalStorage
+        │                                                           → escribe hiperparams
+        ▼                                                              en YAML propio
+   evaluation.evaluate                                              
+   + generate_report                                               Train+evaluate final
+        │                                                           por modelo. Reporte
+        ▼                                                           compara los 3.
+   reports/<variant>/
+   ├─ roc_curve_val.png
+   ├─ confusion_matrix_val.png
+   ├─ training_metrics.json
+   └─ training_report.md
 ```
 
 ### 2.1 División de datos
@@ -159,12 +159,18 @@ Suicide_classifier/
 │   │   ├─ roc_curve_{val,test}.png
 │   │   ├─ confusion_matrix_{val,test}.png
 │   │   └─ {training,test}_metrics.json
-│   ├── optimization_results.json          # Resultados consolidados de Optuna (ambas etapas)
+│   ├── optimization_results.json          # Resultados consolidados de Optuna (todas las etapas)
 │   ├── final_report.md                    # Reporte único consolidado (generate_final_report.py)
-│   └── optuna_xgb_<winner>.journal        # Checkpoint del estudio XGB
+│   ├── next_steps.md                      # Consideraciones pendientes
+│   ├── optuna_tfidf_<variant>.journal     # Checkpoint estudios TF-IDF (Etapa 1)
+│   ├── optuna_xgb_<winner>.journal        # Checkpoint estudio XGBoost (Etapa 2-A)
+│   ├── optuna_svm_<winner>.journal        # Checkpoint estudio SVM (Etapa 2-B)
+│   └── optuna_lr_<winner>.journal         # Checkpoint estudio LR (Etapa 2-C)
 ├── scripts/
 │   ├── run_optimization_pipeline.py       # Etapa 1: tuning de TF-IDF en las 4 variantes
-│   ├── run_xgb_optimization.py            # Etapa 2: tuning de XGB en la variante ganadora
+│   ├── run_xgb_optimization.py            # Etapa 2-A: tuning de XGB en la variante ganadora
+│   ├── run_svm_optimization.py            # Etapa 2-B: tuning de SVM en la variante ganadora
+│   ├── run_lr_optimization.py             # Etapa 2-C: tuning de LR en la variante ganadora
 │   └── generate_final_report.py           # Renderiza reports/final_report.md
 ├── src/
 │   ├── __main__.py                        # CLI: python -m src {train|evaluate|predict}
@@ -192,13 +198,13 @@ Suicide_classifier/
 | `data_ingestion` | `ingestion`, `split_dataset`, `schema_validation`, `data_loader`, `data_mapping`, `handle_missing_data`, `concatenate_df` | Cargar CSV, validar schema, resolver nulos, concatenar columnas de texto, mapear labels, split estratificado train/test. |
 | `preprocessing` | `clean_text`, `clean_text_with_stopwords_nltk`, `clean_text_with_stopwords_domain`, `clean_text_with_stemming`, `tokenize_text`, `preprocessing` | Cleaner baseline + tres variantes. La whitelist de negaciones se respeta en todas las variantes. |
 | `vectorizer` | `build_vectorizer` | `TfidfVectorizer` configurado por YAML. |
-| `model` | `build_model` | Clasificador configurado por YAML. Usa `importlib` para instanciar la clase de `config["model"]["class"]` (default: `xgboost.XGBClassifier`). Soporta los 9 hiperparámetros tuneables más `scale_pos_weight` y `eval_metric`. |
+| `model` | `build_model` | Clasificador configurado por YAML. Usa `importlib` para instanciar cualquier clase sklearn-compatible desde `config["model"]["class"]` (default: `xgboost.XGBClassifier`). Soporta XGBoost, SVM (`sklearn.svm.SVC`), LR (`sklearn.linear_model.LogisticRegression`) o cualquier estimador con `fit`/`predict_proba`. |
 | `pipeline` | `build_pipeline`, `CLEANERS` | Ensambla el Pipeline `cleaner → tfidf → xgboost`. El cleaner se elige del registro `CLEANERS` vía `config["preprocessing"]["variant"]`. |
 | `training` | `train`, `train_pipeline`, `main` | Split estratificado 80/20 + 5-fold Stratified CV (AUC) + fit final. **Early stopping** se activa cuando `config["model"]["early_stopping_rounds"]` está presente: re-fittea el step XGB con un eval_set interno 90/10 para que los árboles dejen de crecer cuando el AUC de validación se estanca. |
 | `inference` | `run_inference`, `run_inference_cli`, `load_pipeline`, `predict` | Predicción **ciega** (no requiere ground truth). |
 | `evaluate_cli` | `run_evaluation`, `run_evaluation_cli` | Predicción **con score**: requiere labels reales, calcula métricas completas, escribe plots + JSON + markdown. |
 | `evaluation` | `compute_metrics`, `plot_roc_curve`, `plot_confusion_matrix`, `evaluate`, `generate_report` | TP/TN/FP/FN, TPR, FPR, AUC, precisión, recall, F1; PNGs de curva ROC y matriz de confusión; reporte markdown auto-contenido. |
-| `optimization` | `optimize_vectorizer`, `optimize_xgb`, `pick_winner_variant`, `run_all_optimizations` | Búsqueda Optuna en dos etapas. La etapa 1 tunea el espacio TF-IDF de 5 dimensiones por variante. La etapa 2 tunea el espacio XGB de 9 dimensiones sobre la ganadora con checkpointing en `JournalStorage`. |
+| `optimization` | `optimize_vectorizer`, `optimize_xgb`, `optimize_model`, `pick_winner_variant`, `run_all_optimizations`, `_SVM_SPACE`, `_LR_SPACE` | Búsqueda Optuna en dos etapas. La etapa 1 tunea el espacio TF-IDF de 5 dimensiones por variante. La etapa 2 tunea cada modelo (XGB 9 dims, SVM 2 dims, LR 2 dims) sobre la ganadora. `optimize_model` es la función genérica que acepta cualquier search space y modelo sklearn-compatible. Todos los estudios usan `JournalStorage` con checkpoint resumible. |
 | `utils` | `load_config` | Parsea un archivo YAML a un dict. |
 
 > **Dos "pipelines" distintos** — `pipeline.build_pipeline()` devuelve el **Pipeline de sklearn** (el objeto modelo serializable). `training.train_pipeline()` es el **orquestador del workflow**. El primero vive dentro del segundo.
@@ -341,45 +347,52 @@ python -m src predict --input <csv> --output predictions.csv
 ### 7.3. Optimización en dos etapas con Optuna
 
 ```powershell
-# Etapa 1: tuning de TF-IDF para las 4 variantes (30 trials cada una), luego
-# entrena + evalúa cada una.
-python scripts/run_optimization_pipeline.py --n-trials 30
+# Etapa 1: tuning de TF-IDF para las 4 variantes (30 trials cada una)
+python scripts/run_optimization_pipeline.py --n-trials 30 --timeout 1650
 # → escribe configs optimizados a configs/optimized/ (originales intactos)
 # → produce reports/<variant>/* y reports/optimization_results.json
 
-# Etapa 2: tuning de XGB sobre la variante ganadora (auto-detectada del paso 1)
-python scripts/run_xgb_optimization.py --n-trials 30
-# → escribe los mejores hiperparams del modelo en configs/optimized/<ganadora>.yaml
-# → checkpoint en reports/optuna_xgb_<winner>.journal
-# → agrega resultados a reports/optimization_results.json
+# Etapa 2-A: tuning de XGB sobre la variante ganadora (auto-detectada)
+python scripts/run_xgb_optimization.py --n-trials 30 --timeout 600
 
-# Renderiza el reporte final consolidado (en español)
+# Etapa 2-B: tuning de SVM (rbf kernel, probability=True)
+python scripts/run_svm_optimization.py --n-trials 30 --timeout 900
+
+# Etapa 2-C: tuning de Logistic Regression
+python scripts/run_lr_optimization.py --n-trials 80 --timeout 500
+
+# Renderiza el reporte final consolidado con tabla comparativa de modelos
 python scripts/generate_final_report.py
-# → reports/final_report.md
+# → reports/final_report.md (muestra comparación de los 3 modelos)
 ```
 
-Para forzar manualmente la variante de la etapa 2 (sin auto-detección):
+Para forzar manualmente la variante (sin auto-detección):
 ```powershell
 python scripts/run_xgb_optimization.py --variant base
+python scripts/run_svm_optimization.py --variant stopwords_nltk
 ```
+
+Todos los scripts soportan `--timeout <seconds>` para limitar la duración del estudio.
 
 ### 7.4. Reanudar una optimización interrumpida
 
-El estudio de XGB usa **`optuna.storages.JournalStorage`**, que persiste cada trial completado a un archivo journal en disco. Si el proceso se mata a la mitad de la corrida, simplemente re-ejecutar el mismo comando reanuda desde el último trial completado — sin flags adicionales.
+**Todos los estudios** (Etapa 1 TF-IDF, Etapa 2 XGB/SVM/LR) usan `JournalStorage`, que persiste cada trial completado a un archivo journal en disco. Si el proceso se mata a la mitad, re-ejecutar el mismo comando reanuda desde donde quedó.
+
+**`--n-trials` es el total deseado**, no trials adicionales. Si ya hay 21 trials en el journal y pides `--n-trials 30`, solo correrá 9 más hasta llegar a 30.
 
 ```powershell
-python scripts/run_xgb_optimization.py --n-trials 30
-# Ctrl+C después del trial 14...
-python scripts/run_xgb_optimization.py --n-trials 30
-# Reanuda desde el trial 15. Total será 30 trials repartidos entre ambas corridas.
+python scripts/run_svm_optimization.py --n-trials 30
+# Ctrl+C después del trial 15...
+python scripts/run_svm_optimization.py --n-trials 30
+# Reanuda desde el trial 16. Total = 30 trials.
 ```
 
 Para empezar de cero (ignorando el checkpoint):
 ```powershell
-python scripts/run_xgb_optimization.py --no-resume
+python scripts/run_svm_optimization.py --no-resume
 ```
 
-La etapa 1 (TF-IDF) corre en memoria y no se checkpointea — sus trials son rápidos (<10 s cada uno) así que reanudar una corrida parcial repitiendo los trials faltantes es barato.
+Los journals viven en `reports/optuna_<model>_<variant>.journal`.
 
 ---
 
@@ -395,7 +408,7 @@ La etapa 1 (TF-IDF) corre en memoria y no se checkpointea — sus trials son rá
 | `sublinear_tf` | `{True, False}` |
 | `max_features` | `{5000, 10000, 20000, 50000}` |
 
-**Etapa 2 — XGBoost (9 dimensiones, solo variante ganadora):**
+**Etapa 2-A — XGBoost (9 dimensiones):**
 
 | Parámetro | Espacio | Qué controla |
 |---|---|---|
@@ -409,7 +422,25 @@ La etapa 1 (TF-IDF) corre en memoria y no se checkpointea — sus trials son rá
 | `reg_alpha` | log-uniforme en `[1e-8, 10.0]` | Regularización L1 |
 | `reg_lambda` | log-uniforme en `[1e-8, 10.0]` | Regularización L2 |
 
-`scale_pos_weight`, `eval_metric` y `random_state` no se tunean — son decisiones de dominio (`n_neg/n_pos`, `auc`, `42`).
+Fijos (no se tunean): `scale_pos_weight=0.93`, `eval_metric=auc`, `random_state=42`.
+
+**Etapa 2-B — SVM (2 dimensiones):**
+
+| Parámetro | Espacio | Qué controla |
+|---|---|---|
+| `C` | log-uniforme en `[0.01, 100]` | Regularización (trade-off margen/clasificación) |
+| `gamma` | log-uniforme en `[1e-4, 1.0]` | Ancho del kernel RBF |
+
+Fijos: `kernel=rbf`, `probability=True`, `random_state=42`.
+
+**Etapa 2-C — Logistic Regression (2 dimensiones):**
+
+| Parámetro | Espacio | Qué controla |
+|---|---|---|
+| `C` | log-uniforme en `[0.001, 100]` | Fuerza de regularización inversa |
+| `max_iter` | int en `[200, 2000]` | Iteraciones máximas del solver |
+
+Fijos: `solver=lbfgs`, `penalty=l2`, `random_state=42`.
 
 Ambos estudios usan **TPE sampler** con `random_state=42`. Función objetivo: media de **5-fold Stratified ROC-AUC** sobre `data/data_train.csv`. El fold de prueba (`data_test_fold1.csv`) **nunca se toca** durante la búsqueda — solo al final, para el Test AUC reportado.
 
@@ -421,37 +452,35 @@ Ambos estudios usan **TPE sampler** con `random_state=42`. Función objetivo: me
 
 ## 9. Resultados actuales
 
-> Los resultados completos viven en [`reports/optimization.md`](reports/optimization.md), generado automáticamente por `scripts/generate_optimization_report.py`. Esta sección es un resumen.
+> Los resultados completos viven en [`reports/final_report.md`](reports/final_report.md), generado por `scripts/generate_final_report.py`. Esta sección es un resumen.
 
-### Resultados de la etapa 1 (comparación de variantes)
+### Etapa 1 — Comparación de variantes de preprocesamiento
 
 Sobre el conjunto de prueba (252 publicaciones nunca vistas durante CV ni Optuna):
 
-| Variante | Test AUC | Recall | Precisión | F1 | FPR |
-|---|---|---|---|---|---|
-| Baseline | 0.7286 | 0.677 | 0.672 | 0.674 | 0.353 |
-| Stopwords NLTK | 0.7137 | 0.661 | 0.672 | 0.667 | 0.344 |
-| Stopwords curadas | 0.7272 | 0.692 | 0.698 | 0.695 | 0.320 |
-| **Stemming** 🏆 | **0.7359** | 0.685 | 0.690 | 0.687 | 0.328 |
+| Variante | CV AUC | Test AUC | Recall | FPR | TP | FN |
+|---|---|---|---|---|---|---|
+| **Baseline** | 0.7590 | **0.7347** | 0.6923 | 0.3361 | 90 | 40 |
+| Stopwords NLTK | 0.7638 | 0.7149 | 0.7000 | 0.3525 | 91 | 39 |
+| Stopwords curadas | 0.7605 | 0.7228 | 0.6692 | 0.3689 | 87 | 43 |
+| Stemming | 0.7607 | 0.7294 | 0.7231 | 0.3607 | 94 | 36 |
 
-Las 4 variantes terminan en un rango muy estrecho de Test AUC (0.71–0.74): la elección del preprocesamiento **no es decisiva** en este corpus. Stemming gana por margen pequeño.
+Las 4 variantes terminan en un rango estrecho de Test AUC (0.71–0.73). Baseline gana por Test AUC.
 
-### Resultados de la etapa 2 (XGBoost tuning sobre stemming)
+### Etapa 2 — Comparación de modelos (sobre variante ganadora)
 
-| Métrica | Antes (XGB defaults) | Después (XGB tuneado) | Δ |
-|---|---|---|---|
-| AUC | 0.7359 | **0.7441** | +0.0082 |
-| **Recall (TPR)** | 0.6846 | **0.7615** | **+0.0769** |
-| Precisión | 0.6899 | 0.7071 | +0.0172 |
-| F1 | 0.6873 | 0.7333 | +0.0460 |
-| FPR | 0.3279 | 0.3361 | +0.0082 |
+| Modelo | CV AUC | Test AUC | F1 | Recall | FPR | TP | FN |
+|---|---|---|---|---|---|---|---|
+| XGBoost (tuneado) | 0.7666 | 0.7351 | 0.6822 | 0.6769 | 0.3279 | 88 | 42 |
+| SVM (tuneado) | 0.7676 | 0.7658 | 0.7368 | 0.7538 | 0.3115 | 98 | 32 |
+| **LR (tuneada)** | **0.7741** | **0.7721** | **0.7197** | 0.7308 | 0.3197 | 95 | 35 |
 
-**La mejora importante es el recall** (+9 puntos): el modelo ahora detecta 99 de 130 ideaciones reales (vs 89 antes). Trade-off pequeño en FPR (+0.008) — favorable para este dominio donde un FN es más costoso que un FP.
+LR logra el mejor Test AUC (0.7721) y SVM el mejor Recall (0.7538). XGBoost queda detrás de ambos modelos lineales — en un corpus de ~1,500 filas con features TF-IDF sparse, modelos más simples generalizan mejor.
 
-**Modelo final productivo:**
-- Variante: `stemming` (ver `configs/variant_stemming.yaml`)
-- Pipeline serializado: `models/model_stemming.joblib`
-- Test AUC: 0.7441 · Recall: 76.1% · F1: 0.7333
+**Modelo ganador:**
+- Tipo: Logistic Regression (`sklearn.linear_model.LogisticRegression`)
+- Variante: `base` · Config: `configs/optimized/lr_base.yaml`
+- Test AUC: 0.7721 · F1: 0.7197 · Recall: 73.1%
 
 ---
 
@@ -481,10 +510,10 @@ pytest --cov=src --cov-report=term-missing
 
 ## 11. Decisiones de diseño
 
-- **TF-IDF + XGBoost en lugar de deep learning.** Para ~1,500 filas de entrenamiento de texto en inglés tipo Reddit, un espacio de features sparse linear con un clasificador de árboles boosted alcanza AUC competitivo a una fracción del costo de entrenamiento — y es mucho más fácil de debuggear, versionar y desplegar. Modelos como BERT requieren transferencia de un dominio mucho mayor para no overfittear.
+- **TF-IDF + modelos clásicos en lugar de deep learning.** Para ~1,500 filas de entrenamiento de texto en inglés tipo Reddit, TF-IDF con modelos supervisados (LR, SVM, XGBoost) alcanza AUC competitivo a una fracción del costo — y es más fácil de debuggear, versionar y desplegar. Los resultados confirman que modelos lineales (LR, SVM) generalizan mejor que XGBoost en este régimen de datos.
 - **`scale_pos_weight = 0.93`.** Es la razón empírica `n_neg / n_pos` del set de entrenamiento; pasada a XGBoost en lugar de oversampling para preservar la distribución original al evaluar.
 - **Cleaning dentro del Pipeline.** Envolver el `clean_text*` elegido en un `FunctionTransformer` garantiza que la inferencia aplique exactamente el mismo preprocesamiento que el entrenamiento — no hay un path de "serve" separado que pueda derivar (skew). Esto aplica para las cuatro variantes.
-- **Tuning en dos etapas en lugar de conjunto.** TF-IDF (5 dims) + XGBoost (9 dims) = espacio conjunto de 14 dimensiones, intratable en 30 trials. Tunear primero el vectorizer y congelarlo antes de tunear el modelo descompone el problema y converge en un budget mucho menor. Trade-off: ignora interacciones entre los dos — pero esas interacciones son empíricamente menores a esta escala.
+- **Tuning en dos etapas en lugar de conjunto.** TF-IDF (5 dims) + modelo (2–9 dims) = espacio conjunto intratable en 30 trials. Tunear primero el vectorizer y congelarlo antes de tunear cada modelo descompone el problema. Los TF-IDF params se comparten entre los 3 modelos (tuneados con XGBoost en Stage 1 y reutilizados por SVM/LR en Stage 2).
 - **Early stopping solo en el fit final.** Dentro del CV, cada fold entrena exactamente el `n_estimators` que Optuna propone, así los scores fold-a-fold son directamente comparables. Después de que Optuna escoge la ganadora, el entrenamiento final usa un eval split interno + `early_stopping_rounds=30` para que el modelo desplegado deje de crecer árboles cuando el AUC de validación se estanca, evitando overfitting al deployment sin distorsionar la señal del CV.
 - **`predict` y `evaluate` como subcomandos separados.** `predict` es para inferencia productiva ciega (sin labels). `evaluate` es para scoring offline contra un fold etiquetado. Separarlos mantiene a `run_inference` ignorante del ground truth y hace que `evaluate` sea el punto de entrada obvio para el reporte final del test.
 - **JournalStorage para checkpoints de XGB.** Los estudios de XGB son 5–10× más lentos que los de TF-IDF (árboles más profundos, más rondas). Persistir el estudio a un journal file significa que un Ctrl+C o el laptop entrando en sleep no malgasta los trials ya hechos.
@@ -499,45 +528,46 @@ pytest --cov=src --cov-report=term-missing
 ### Implementado
 
 - [x] Scaffolding del proyecto (`pyproject.toml`, `src/`, `tests/`, `configs/`, `notebooks/`, `models/`, `data/`, `reports/`, `scripts/`).
-- [x] `data_ingestion`: validación de schema, loader CSV, manejo NaN, concatenación `title + text`, mapeo `yes/no → 1/0`, `split_dataset` estratificado, retorno temprano de `None` en mismatch de schema.
-- [x] `preprocessing`: `clean_text` baseline + 3 variantes (`stopwords_nltk`, `stopwords_domain`, `stemming`). Whitelist de negaciones aplicada en todas.
+- [x] `data_ingestion`: validación de schema, loader CSV, manejo NaN, concatenación `title + text`, mapeo `yes/no → 1/0`, `split_dataset` estratificado.
+- [x] `preprocessing`: `clean_text` baseline + 3 variantes (`stopwords_nltk`, `stopwords_domain`, `stemming`). Whitelist de negaciones preservada en todas.
 - [x] `vectorizer`: `TfidfVectorizer` configurado por YAML.
-- [x] `model`: `XGBClassifier` configurado por YAML con 9 hiperparámetros tuneables + defaults back-compat.
-- [x] `pipeline`: ensamble end-to-end `cleaner → tfidf → xgboost` con registro `CLEANERS`. Variante elegida vía config.
-- [x] `training`: split estratificado 80/20 + 5-fold Stratified CV (AUC); `early_stopping_rounds` activado por YAML.
-- [x] `evaluation`: TP/TN/FP/FN, TPR, FPR, AUC, precisión, recall, F1; PNGs de ROC y matriz de confusión; `generate_report` markdown.
+- [x] `model`: `build_model` genérico vía `importlib` (`config["model"]["class"]`). Soporta XGBoost, SVM, LR, o cualquier clase sklearn-compatible.
+- [x] `pipeline`: ensamble end-to-end `cleaner → tfidf → classifier` con registro `CLEANERS`. Variante elegida vía config.
+- [x] `training`: split estratificado 80/20 + 5-fold Stratified CV (AUC); `early_stopping_rounds` condicional (solo XGBoost).
+- [x] `evaluation`: TP/TN/FP/FN, TPR, FPR, AUC, precisión, recall, F1; PNGs de ROC y CM; `generate_report` markdown.
 - [x] `inference`: CLI ciego (`python -m src predict`).
 - [x] `evaluate_cli`: CLI con scoring (`python -m src evaluate`).
-- [x] `optimization` etapa 1: `optimize_vectorizer` (espacio TF-IDF de 5 dims, 30 trials, 5-fold CV).
-- [x] `optimization` etapa 2: `optimize_xgb` (espacio XGB de 9 dims, 30 trials, 5-fold CV) con checkpointing en `JournalStorage` y logging de progreso por trial.
+- [x] `optimization` etapa 1: `optimize_vectorizer` (TF-IDF 5 dims, 4 variantes, checkpoint con `JournalStorage`).
+- [x] `optimization` etapa 2: `optimize_xgb` (9 dims), `optimize_model` genérico (SVM 2 dims, LR 2 dims), todos con `JournalStorage`.
 - [x] `pick_winner_variant` para conectar etapa 1 → etapa 2 automáticamente.
-- [x] Scripts orquestadores en `scripts/`: `run_optimization_pipeline.py`, `run_xgb_optimization.py`, `generate_final_report.py`.
-- [x] Notebook EDA con análisis de outliers honesto y justificación documentada.
-- [x] Cobertura completa de pytest sobre cada módulo (~228 tests passing).
-- [x] Reporte final consolidado: `reports/final_report.md` (reemplaza los múltiples .md intermedios).
-- [x] `build_model` genérico vía `importlib` (`config["model"]["class"]`), con backward compat.
-- [x] Optimización escribe a `configs/optimized/` — los configs originales nunca se modifican.
+- [x] Scripts orquestadores: `run_optimization_pipeline.py`, `run_xgb_optimization.py`, `run_svm_optimization.py`, `run_lr_optimization.py`, `generate_final_report.py`.
+- [x] Reporte final con tabla comparativa de modelos (elige el mejor por Test AUC).
+- [x] Semántica de `--n-trials`: total deseado (no aditivo al resumir).
+- [x] `--timeout` en todos los scripts de optimización.
+- [x] Notebook EDA con análisis de outliers.
+- [x] Cobertura pytest (~228 tests passing).
 - [x] Fix del lock de Windows en `JournalStorage` (`JournalFileOpenLock`).
 
 ### Próximos pasos (corto plazo)
 
-- [ ] **`reports/algorithm_justification.md`** — escrito a mano: por qué TF-IDF + XGBoost en lugar de deep learning, con referencias de literatura.
-- [ ] **Tuning de threshold**. El default es 0.5; en este dominio un FN es más costoso que un FP. Después de inspeccionar la curva precision-recall, evaluar thresholds en `{0.35, 0.40, 0.45}` y elegir por piso de recall.
-- [ ] **Análisis de errores**. Surface los top-K falsos negativos y falsos positivos, buscar patrones sistemáticos (longitud, vocabulario, sarcasmo), retroalimentar al preprocesamiento.
+- [ ] **Cambiar `pick_winner_variant` para usar CV AUC** en lugar de Test AUC. Usar el test set para selección de modelo es fuga de información — el test set solo debería verse al final para reportar métricas definitivas.
+- [ ] **Reorganizar `reports/`** — actualmente los journals, PNGs, y JSONs están mezclados. Estructura propuesta: `reports/journals/`, `reports/tfidf/<variant>/`, `reports/<model>/<variant>/`.
+- [ ] **Función maestra multi-modelo** — consolidar `run_xgb_optimization.py`, `run_svm_optimization.py`, `run_lr_optimization.py` en un solo `run_model_optimization.py --model xgb|svm|lr` para reducir duplicación.
+- [ ] **Tuning de threshold**. Default 0.5; en este dominio un FN es más costoso que un FP. Evaluar thresholds en `{0.35, 0.40, 0.45}` por piso de recall.
+- [ ] **Análisis de errores**. Top-K falsos negativos y positivos, buscar patrones (longitud, vocabulario, sarcasmo).
 
 ### Próximos pasos (mediano plazo)
 
-- [ ] **Splits user-disjoint**: actualmente ~14% de filas del test vienen de usuarios también presentes en train. Estratificar por `user_id` en lugar de por fila para una metodología más estricta.
-- [ ] **Reporte de coverage**: `pytest --cov=src --cov-report=term-missing`, target ≥ 80%.
-- [ ] **Documentar la procedencia del split train/test**: el script que produjo `data_train.csv` y `data_test_fold1.csv` no está commited. Wrappear `split_dataset` para que el split sea reproducible desde una fuente raw única.
+- [ ] **Splits user-disjoint**: ~14% de filas del test vienen de usuarios también presentes en train. Estratificar por `user_id` para metodología más estricta.
+- [ ] **`reports/algorithm_justification.md`** — por qué TF-IDF + modelos clásicos en lugar de deep learning, con referencias.
+- [ ] **Documentar la procedencia del split train/test**: wrappear `split_dataset` para que sea reproducible desde fuente raw.
 
 ### Próximos pasos (stretch)
 
-- [ ] **`TruncatedSVD` post-TF-IDF** — solo vale la pena si la matriz sparse se vuelve un cuello de botella de memoria/velocidad.
-- [ ] **Strategy pattern para preprocessing**: definir una interfaz `Preprocessor` para que las variantes de cleaning se puedan intercambiar desde la config sin tocar `pipeline.py`.
-- [ ] **Variantes combinadas**: e.g., `stemming + stopwords_domain`. Vale la pena si las variantes individuales muestran lift real sobre el baseline.
-- [ ] **Pruning durante CV de XGB**: reportar scores intermedios por fold para que Optuna pode trials no-prometedores temprano. Requiere reportar AUCs por-fold dentro del objective.
-- [ ] **Tuning en una sola corrida del XGB y TF-IDF** vía hierarchical o joint search — solo si el tiempo lo permite.
+- [ ] **`TruncatedSVD` post-TF-IDF** — si la matriz sparse se vuelve cuello de botella.
+- [ ] **Variantes combinadas**: e.g., `stemming + stopwords_domain`.
+- [ ] **Pruning durante CV**: reportar AUCs por-fold para que Optuna pode trials no-prometedores.
+- [ ] **Joint search TF-IDF + modelo** vía hierarchical search.
 
 ---
 

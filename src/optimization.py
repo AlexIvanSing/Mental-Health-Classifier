@@ -209,27 +209,31 @@ def optimize_vectorizer(
     if n_already > 0 and resume:
         print(f"  [{variant}] resuming study with {n_already} completed trials in journal")
 
-    # --- Progress callback ---
-    progress_state = {"trial_idx": n_already}
+    n_remaining = max(0, n_trials - n_already)
 
-    def _progress_cb(_study, trial):
-        progress_state["trial_idx"] += 1
-        idx = progress_state["trial_idx"]
-        total = n_already + n_trials
-        best = _study.best_value if len(_study.trials) > 0 else float("nan")
-        val = trial.value if trial.value is not None else float("nan")
-        print(
-            f"  [tfidf-{variant}] Trial {idx}/{total}  AUC={val:.4f}  best={best:.4f}",
-            flush=True,
+    if n_remaining == 0:
+        print(f"  [{variant}] already has {n_already}>={n_trials} trials, skipping")
+    else:
+        # --- Progress callback ---
+        progress_state = {"trial_idx": n_already}
+
+        def _progress_cb(_study, trial):
+            progress_state["trial_idx"] += 1
+            idx = progress_state["trial_idx"]
+            best = _study.best_value if len(_study.trials) > 0 else float("nan")
+            val = trial.value if trial.value is not None else float("nan")
+            print(
+                f"  [tfidf-{variant}] Trial {idx}/{n_trials}  AUC={val:.4f}  best={best:.4f}",
+                flush=True,
+            )
+
+        study.optimize(
+            objective,
+            n_trials=n_remaining,
+            timeout=timeout,
+            show_progress_bar=False,
+            callbacks=[_progress_cb],
         )
-
-    study.optimize(
-        objective,
-        n_trials=n_trials,
-        timeout=timeout,
-        show_progress_bar=False,
-        callbacks=[_progress_cb],
-    )
 
     # Resolve the ngram_idx back to a real tuple for human consumption /
     # YAML overwrite. Everything else is already a primitive.
@@ -326,6 +330,46 @@ _XGB_SPACE = {
 }
 
 
+_SVM_SPACE = {
+    "C":     ("logf", 0.01, 100.0),
+    "gamma": ("logf", 1e-4, 1.0),
+}
+
+_LR_SPACE = {
+    "C":        ("logf", 0.001, 100.0),
+    "max_iter": ("int",  200,   2000),
+}
+
+
+def _suggest_params(trial: optuna.Trial, space: dict) -> dict:
+    """Generic suggest_* dispatcher for any space dict."""
+    params = {}
+    for name, spec in space.items():
+        kind, lo, hi = spec
+        if kind == "int":
+            params[name] = trial.suggest_int(name, lo, hi)
+        elif kind == "float":
+            params[name] = trial.suggest_float(name, lo, hi)
+        elif kind == "logf":
+            params[name] = trial.suggest_float(name, lo, hi, log=True)
+        else:
+            raise ValueError(f"Unknown space kind: {kind}")
+    return params
+
+
+def _cast_params(raw: dict, space: dict) -> dict:
+    """Convert Optuna raw values to YAML-friendly Python primitives."""
+    result = {}
+    for name, val in raw.items():
+        if name in space and space[name][0] == "int":
+            result[name] = int(val)
+        elif isinstance(val, float):
+            result[name] = float(round(val, 6))
+        else:
+            result[name] = val
+    return result
+
+
 def _suggest_xgb_params(trial: optuna.Trial) -> dict:
     """Map the search-space spec to Optuna `suggest_*` calls."""
     params = {}
@@ -346,6 +390,7 @@ def optimize_xgb(
     variant: str,
     config_path: str,
     n_trials: int = 30,
+    timeout: int | None = None,
     storage_path: str | None = None,
     resume: bool = True,
 ) -> dict:
@@ -449,6 +494,8 @@ def optimize_xgb(
     if n_already > 0 and resume:
         print(f"  [{variant}] resuming study with {n_already} completed trials in journal")
 
+    n_remaining = max(0, n_trials - n_already)
+
     def objective(trial: optuna.Trial) -> float:
         xgb_params = _suggest_xgb_params(trial)
 
@@ -476,26 +523,29 @@ def optimize_xgb(
 
         return float(scores.mean())
 
-    # --- Progress callback ---
-    progress_state = {"trial_idx": n_already}
+    if n_remaining == 0:
+        print(f"  [{variant}] already has {n_already}>={n_trials} trials, skipping")
+    else:
+        # --- Progress callback ---
+        progress_state = {"trial_idx": n_already}
 
-    def _progress_cb(_study, trial):
-        progress_state["trial_idx"] += 1
-        idx = progress_state["trial_idx"]
-        total = n_already + n_trials
-        best = _study.best_value if len(_study.trials) > 0 else float("nan")
-        val = trial.value if trial.value is not None else float("nan")
-        print(
-            f"  [xgb-{variant}] Trial {idx}/{total}  AUC={val:.4f}  best={best:.4f}",
-            flush=True,
+        def _progress_cb(_study, trial):
+            progress_state["trial_idx"] += 1
+            idx = progress_state["trial_idx"]
+            best = _study.best_value if len(_study.trials) > 0 else float("nan")
+            val = trial.value if trial.value is not None else float("nan")
+            print(
+                f"  [xgb-{variant}] Trial {idx}/{n_trials}  AUC={val:.4f}  best={best:.4f}",
+                flush=True,
+            )
+
+        study.optimize(
+            objective,
+            n_trials=n_remaining,
+            timeout=timeout,
+            show_progress_bar=False,
+            callbacks=[_progress_cb],
         )
-
-    study.optimize(
-        objective,
-        n_trials=n_trials,
-        show_progress_bar=False,
-        callbacks=[_progress_cb],
-    )
 
     # Snapshot best params as YAML-friendly Python primitives.
     best_raw = study.best_params
@@ -517,6 +567,136 @@ def optimize_xgb(
     print(
         f"[xgb-{variant}] best CV AUC = {study.best_value:.4f}  "
         f"({len(completed)} completed trials in study; params: {best_params})"
+    )
+
+    return {
+        "variant":            variant,
+        "best_cv_auc":        float(round(study.best_value, 4)),
+        "best_params":        best_params,
+        "n_trials":           len(completed),
+        "n_trials_this_run":  n_trials,
+        "all_trial_scores":   [float(round(s, 4)) for s in all_scores],
+        "storage_path":       storage_path,
+    }
+
+
+def optimize_model(
+    variant: str,
+    config_path: str,
+    space: dict,
+    model_key: str,
+    model_overrides: dict,
+    n_trials: int = 30,
+    timeout: int | None = None,
+    storage_path: str | None = None,
+    resume: bool = True,
+) -> dict:
+    """
+    Generic Optuna study over any sklearn-compatible classifier.
+
+    The TF-IDF vectorizer is held fixed at the values already in config_path.
+    model_overrides must include "class" and any fixed constructor kwargs
+    (e.g. ``probability=True`` for SVC).  The search space (space) drives
+    the trial suggestions.
+
+    Returns the same dict shape as optimize_xgb().
+    """
+    if variant not in CLEANERS:
+        raise ValueError(
+            f"Unknown variant {variant!r}. Expected one of: {sorted(CLEANERS)}"
+        )
+
+    base_config = load_config(config_path)
+    X_raw, y = _load_corpus(base_config)
+
+    cleaner = CLEANERS[variant]
+    X_clean = [cleaner(x) for x in X_raw]
+
+    vectorizer = build_vectorizer(base_config)
+    X_mat = vectorizer.fit_transform(X_clean)
+
+    cv = StratifiedKFold(
+        n_splits=5,
+        shuffle=True,
+        random_state=base_config["training"]["random_state"],
+    )
+
+    if storage_path is None:
+        storage_path = f"reports/optuna_{model_key}_{variant}.journal"
+    Path(storage_path).parent.mkdir(parents=True, exist_ok=True)
+
+    if not resume and os.path.exists(storage_path):
+        os.remove(storage_path)
+        print(f"  [{variant}] --no-resume: deleted existing journal at {storage_path}")
+
+    storage = JournalStorage(
+        JournalFileBackend(storage_path, lock_obj=JournalFileOpenLock(storage_path))
+    )
+    study_name = f"{model_key}_{variant}"
+
+    study = optuna.create_study(
+        study_name=study_name,
+        storage=storage,
+        load_if_exists=True,
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(
+            seed=base_config["training"]["random_state"]
+        ),
+    )
+
+    n_already = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+    if n_already > 0 and resume:
+        print(f"  [{variant}] resuming {model_key} study with {n_already} completed trials in journal")
+
+    n_remaining = max(0, n_trials - n_already)
+
+    def objective(trial: optuna.Trial) -> float:
+        trial_params = _suggest_params(trial, space)
+        trial_cfg = {"model": {**model_overrides, **trial_params}}
+        model = build_model(trial_cfg)
+        try:
+            scores = cross_val_score(
+                model, X_mat, y,
+                cv=cv,
+                scoring="roc_auc",
+                n_jobs=-1,
+                error_score="raise",
+            )
+        except Exception:
+            return 0.0
+        return float(scores.mean())
+
+    if n_remaining == 0:
+        print(f"  [{variant}] already has {n_already}>={n_trials} {model_key} trials, skipping")
+    else:
+        progress_state = {"trial_idx": n_already}
+
+        def _progress_cb(_study, trial):
+            progress_state["trial_idx"] += 1
+            idx = progress_state["trial_idx"]
+            best = _study.best_value if len(_study.trials) > 0 else float("nan")
+            val = trial.value if trial.value is not None else float("nan")
+            print(
+                f"  [{model_key}-{variant}] Trial {idx}/{n_trials}  AUC={val:.4f}  best={best:.4f}",
+                flush=True,
+            )
+
+        study.optimize(
+            objective,
+            n_trials=n_remaining,
+            timeout=timeout,
+            show_progress_bar=False,
+            callbacks=[_progress_cb],
+        )
+
+    best_params = _cast_params(study.best_params, space)
+
+    completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    all_scores = [t.value for t in completed if t.value is not None]
+
+    print(
+        f"[{model_key}-{variant}] best CV AUC = {study.best_value:.4f}  "
+        f"({len(completed)} completed trials; params: {best_params})"
     )
 
     return {
@@ -564,13 +744,11 @@ def pick_winner_variant(
     with open(path) as f:
         data = json.load(f)
 
-    # The top-level keys are variant names; each value has a "test" block
-    # with an "AUC" key. (The optional "xgb_optimization" key, if present,
-    # is intentionally ignored — we always pick from the TF-IDF stage.)
+    _OPT_KEYS = {"xgb_optimization", "svm_optimization", "lr_optimization"}
     candidates = {
         k: v.get("test", {}).get("AUC")
         for k, v in data.items()
-        if k != "xgb_optimization" and isinstance(v, dict) and "test" in v
+        if k not in _OPT_KEYS and isinstance(v, dict) and "test" in v
     }
     candidates = {k: v for k, v in candidates.items() if v is not None}
 

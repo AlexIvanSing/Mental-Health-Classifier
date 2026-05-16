@@ -1,25 +1,20 @@
 """
-Stage 2 orchestrator: tune the XGBClassifier hyperparameters on the
-winning variant from stage 1 (TF-IDF tuning).
+Stage 2-C: tune LogisticRegression hyperparameters on the winning variant.
 
 Steps:
   1. Detect the winning variant (highest Test AUC in
      ``reports/optimization_results.json``) — unless ``--variant`` is given.
-  2. Run ``optimize_xgb`` with checkpointing to
-     ``reports/optuna_xgb_<winner>.journal``.
-  3. Write the best hyperparameters + ``early_stopping_rounds=30`` to
-     the optimized YAML in ``configs/optimized/`` (originals are never
-     modified).
-  4. Train end-to-end on the winner's variant (early stopping kicks in
-     thanks to the new YAML field).
-  5. Evaluate on the held-out test fold.
-  6. Append the run to the consolidated JSON under "xgb_optimization".
+  2. Run ``optimize_model`` with _LR_SPACE and checkpointing to
+     ``reports/optuna_lr_<winner>.journal``.
+  3. Write best params + fixed keys to ``configs/optimized/lr_<winner>.yaml``.
+  4. Train end-to-end and evaluate on the held-out test fold.
+  5. Append results to the consolidated JSON under "lr_optimization".
 
 Run as:
-  python scripts/run_xgb_optimization.py                 # auto-detect winner
-  python scripts/run_xgb_optimization.py --variant base  # override
-  python scripts/run_xgb_optimization.py --n-trials 50
-  python scripts/run_xgb_optimization.py --no-resume     # ignore checkpoint
+  python scripts/run_lr_optimization.py
+  python scripts/run_lr_optimization.py --variant base
+  python scripts/run_lr_optimization.py --n-trials 50
+  python scripts/run_lr_optimization.py --no-resume
 """
 
 import argparse
@@ -33,7 +28,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.evaluate_cli import run_evaluation
-from src.optimization import optimize_xgb, pick_winner_variant
+from src.optimization import optimize_model, _LR_SPACE, pick_winner_variant
 from src.training import train_pipeline
 from src.utils import load_config
 
@@ -53,24 +48,35 @@ OPTIMIZED_CONFIGS = {
 }
 
 CONSOLIDATED = "reports/optimization_results.json"
-DEFAULT_EARLY_STOPPING_ROUNDS = 30
+MODEL_KEY = "lr"
+JSON_KEY = "lr_optimization"
+
+FIXED_KEYS = {
+    "class":       "sklearn.linear_model.LogisticRegression",
+    "solver":      "lbfgs",
+    "penalty":     "l2",
+    "random_state": 42,
+}
 
 
-def write_optimized_model_block(yaml_path: str, best_params: dict, fixed_keys: dict) -> None:
-    """
-    Read the (already-optimized) YAML at *yaml_path*, replace its ``model``
-    block with the merged Optuna best params + fixed knobs, and write it
-    back. The original configs in ``configs/`` are never touched — this
-    function only modifies files inside ``configs/optimized/``.
-    """
-    cfg = load_config(yaml_path)
-    cfg["model"] = {**fixed_keys, **best_params}
-    with open(yaml_path, "w") as f:
+def _write_lr_yaml(base_yaml_path: str, out_yaml_path: str, best_params: dict, variant: str) -> None:
+    cfg = load_config(base_yaml_path)
+    cfg["model"] = {**FIXED_KEYS, **best_params}
+    cfg["paths"]["model_output"]        = f"models/lr_{variant}.joblib"
+    cfg["paths"]["roc_val_output"]      = f"reports/lr_{variant}_roc_val.png"
+    cfg["paths"]["cm_val_output"]       = f"reports/lr_{variant}_cm_val.png"
+    cfg["paths"]["metrics_val_output"]  = f"reports/lr_{variant}_training_metrics.json"
+    cfg["paths"]["report_val_output"]   = f"reports/lr_{variant}_training_report.md"
+    cfg["paths"]["roc_test_output"]     = f"reports/lr_{variant}_roc_test.png"
+    cfg["paths"]["cm_test_output"]      = f"reports/lr_{variant}_cm_test.png"
+    cfg["paths"]["metrics_test_output"] = f"reports/lr_{variant}_test_metrics.json"
+    cfg["paths"]["report_test_output"]  = f"reports/lr_{variant}_test_report.md"
+    Path(out_yaml_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_yaml_path, "w") as f:
         yaml.safe_dump(cfg, f, sort_keys=False, default_flow_style=False)
 
 
 def _to_py(o):
-    """Recursively convert numpy scalars to Python primitives."""
     if isinstance(o, dict):
         return {k: _to_py(v) for k, v in o.items()}
     if isinstance(o, list):
@@ -88,52 +94,47 @@ def main(variant: str | None, n_trials: int, timeout: int | None, resume: bool) 
     else:
         if variant not in VARIANT_CONFIGS:
             raise SystemExit(
-                f"Unknown variant {variant!r}. Expected one of: "
-                f"{sorted(VARIANT_CONFIGS)}"
+                f"Unknown variant {variant!r}. Expected one of: {sorted(VARIANT_CONFIGS)}"
             )
         winner = variant
         print(f"Variant override: {winner!r}")
 
     opt_path = OPTIMIZED_CONFIGS[winner]
-    print(f"Tuning XGB for variant {winner!r} (config: {opt_path})\n")
+    out_path = f"configs/optimized/lr_{winner}.yaml"
+    print(f"Tuning LR for variant {winner!r} (base config: {opt_path})\n")
 
     # --- Step 2: Optuna ---
-    storage_path = f"reports/optuna_xgb_{winner}.journal"
-    optuna_result = optimize_xgb(
+    storage_path = f"reports/optuna_{MODEL_KEY}_{winner}.journal"
+    optuna_result = optimize_model(
         winner,
         opt_path,
+        space=_LR_SPACE,
+        model_key=MODEL_KEY,
+        model_overrides=FIXED_KEYS,
         n_trials=n_trials,
+        timeout=timeout,
         storage_path=storage_path,
         resume=resume,
-        timeout=timeout,
     )
 
-    # --- Step 3: write best XGB params to the optimized YAML ---
-    print(f"\nWriting best XGB hyperparameters to {opt_path}")
-    base_cfg = load_config(opt_path)
-    fixed_keys = {
-        "class":                 base_cfg["model"].get("class", "xgboost.XGBClassifier"),
-        "scale_pos_weight":      base_cfg["model"]["scale_pos_weight"],
-        "eval_metric":           base_cfg["model"]["eval_metric"],
-        "random_state":          base_cfg["model"]["random_state"],
-        "early_stopping_rounds": DEFAULT_EARLY_STOPPING_ROUNDS,
-    }
-    write_optimized_model_block(opt_path, optuna_result["best_params"], fixed_keys)
+    # --- Step 3: write LR yaml ---
+    print(f"\nWriting best LR hyperparameters to {out_path}")
+    _write_lr_yaml(opt_path, out_path, optuna_result["best_params"], winner)
 
-    # --- Step 4 & 5: train + evaluate the tuned pipeline ---
-    print(f"\nTraining and evaluating tuned pipeline ({winner})...")
-    train_metrics = train_pipeline(opt_path)
-    cfg_after = load_config(opt_path)
+    # --- Step 4 & 5: train + evaluate ---
+    print(f"\nTraining and evaluating LR pipeline ({winner})...")
+    train_metrics = train_pipeline(out_path)
+    cfg_after = load_config(out_path)
     test_metrics = run_evaluation(cfg_after["data"]["test_path"], cfg_after)
 
     # --- Step 6: append to consolidated JSON ---
     final = {
         "variant":      winner,
-        "yaml_path":    opt_path,
+        "yaml_path":    out_path,
         "n_trials":     optuna_result["n_trials"],
         "best_cv_auc":  optuna_result["best_cv_auc"],
         "best_params":  optuna_result["best_params"],
-        "fixed_keys":   fixed_keys,
+        "fixed_keys":   FIXED_KEYS,
         "storage_path": storage_path,
         "train": {
             "cv_auc_mean":   train_metrics.get("cv_auc_mean"),
@@ -168,14 +169,14 @@ def main(variant: str | None, n_trials: int, timeout: int | None, resume: bool) 
             data = json.load(f)
     else:
         data = {}
-    data["xgb_optimization"] = _to_py(final)
+    data[JSON_KEY] = _to_py(final)
     with open(consolidated_path, "w") as f:
         json.dump(data, f, indent=2)
 
     # --- Summary ---
     print()
     print("=" * 72)
-    print("XGB tuning summary")
+    print("Logistic Regression tuning summary")
     print("=" * 72)
     print(f"Variant:               {winner}")
     print(f"Best CV AUC (Optuna):  {optuna_result['best_cv_auc']:.4f}")
@@ -185,15 +186,15 @@ def main(variant: str | None, n_trials: int, timeout: int | None, resume: bool) 
     print(f"FPR (test):            {test_metrics['FPR']:.4f}")
     print(f"F1 (test):             {test_metrics['F1']:.4f}")
     print()
-    print(f"Best hyperparameters written to {opt_path}")
+    print(f"Best hyperparameters written to {out_path}")
     print(f"Consolidated results updated:   {CONSOLIDATED}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--variant", default=None, help="Override winner detection")
-    parser.add_argument("--n-trials", type=int, default=30)
-    parser.add_argument("--timeout", type=int, default=None, help="Max seconds for the study")
+    parser.add_argument("--n-trials", type=int, default=50)
+    parser.add_argument("--timeout", type=int, default=None, help="Max seconds per study")
     parser.add_argument(
         "--no-resume", dest="resume", action="store_false",
         help="Ignore existing journal and start a fresh study",

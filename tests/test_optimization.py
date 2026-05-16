@@ -244,17 +244,22 @@ def test_optimize_xgb_rejects_unknown_variant(tiny_config_file, tmp_path):
 
 def test_optimize_xgb_checkpoint_persists_across_calls(tiny_config_file, tmp_path):
     """
-    Two sequential calls with resume=True must produce a study that has
-    n_trials_call_1 + n_trials_call_2 completed trials total.
+    n_trials is the desired TOTAL, not additional trials per call.
+    First call with n_trials=2 runs 2 trials. Second call with n_trials=4
+    adds 2 more (reaching 4 total). Second call with same n_trials=2 skips.
     """
     storage = str(tmp_path / "xgb.journal")
 
     r1 = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage)
-    assert r1["n_trials"] >= 2  # at least 2 completed in study so far
+    assert r1["n_trials"] == 2
 
-    r2 = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage, resume=True)
-    # Cumulative count should be at least the first call's count + 2 new trials
-    assert r2["n_trials"] >= r1["n_trials"] + 1  # >= because some trials may fail and not count
+    # Requesting more total trials — should add 2 more
+    r2 = optimize_xgb("base", tiny_config_file, n_trials=4, storage_path=storage, resume=True)
+    assert r2["n_trials"] >= r1["n_trials"] + 1  # at least 3, ideally 4
+
+    # Requesting same total as already done — should skip
+    r3 = optimize_xgb("base", tiny_config_file, n_trials=2, storage_path=storage, resume=True)
+    assert r3["n_trials"] == r2["n_trials"]  # no new trials added
 
 
 def test_optimize_xgb_no_resume_starts_fresh(tiny_config_file, tmp_path):

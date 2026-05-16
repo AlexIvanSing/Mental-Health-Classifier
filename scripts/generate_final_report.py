@@ -74,16 +74,31 @@ def main() -> None:
     with open(CONSOLIDATED) as f:
         data = json.load(f)
 
-    variants = {k: v for k, v in data.items() if k != "xgb_optimization"}
+    _OPT_KEYS = {"xgb_optimization", "svm_optimization", "lr_optimization"}
+    variants = {k: v for k, v in data.items() if k not in _OPT_KEYS}
     xgb_opt = data.get("xgb_optimization")
+    svm_opt = data.get("svm_optimization")
+    lr_opt  = data.get("lr_optimization")
 
     winner_stage1 = max(variants, key=lambda v: variants[v]["test"]["AUC"])
-    final = xgb_opt if xgb_opt else variants[winner_stage1]
-    final_variant = xgb_opt["variant"] if xgb_opt else winner_stage1
 
-    imgs = _resolve_image_paths(
-        final.get("yaml_path", f"configs/optimized/{final_variant}.yaml")
-    )
+    # Pick best model across all tuned options by Test AUC
+    model_candidates = {
+        label: entry for label, entry in [
+            ("XGBoost", xgb_opt),
+            ("SVM",     svm_opt),
+            ("LR",      lr_opt),
+        ] if entry is not None
+    }
+    if model_candidates:
+        best_model_label = max(model_candidates, key=lambda k: model_candidates[k]["test"]["AUC"])
+        final = model_candidates[best_model_label]
+    else:
+        best_model_label = None
+        final = variants[winner_stage1]
+
+    final_yaml = final.get("yaml_path", f"configs/optimized/{final.get('variant', winner_stage1)}.yaml")
+    imgs = _resolve_image_paths(final_yaml)
 
     out = []
 
@@ -197,8 +212,44 @@ def main() -> None:
         out.append(INSIGHT)
         out.append("")
 
-    # ── 5. Resultados finales sobre test ───────────────────────────────
-    out.append("## 5. Resultados finales sobre test")
+    # ── 5. Comparacion de modelos ──────────────────────────────────────
+    model_entries = []
+    if xgb_opt:
+        model_entries.append(("XGBoost (tuneado)", xgb_opt))
+    if svm_opt:
+        model_entries.append(("SVM (tuneado)", svm_opt))
+    if lr_opt:
+        model_entries.append(("Logistic Regression (tuneada)", lr_opt))
+
+    if len(model_entries) >= 2:
+        out.append("## 5. Comparacion de Modelos")
+        out.append("")
+        out.append("| Modelo | CV AUC | Test AUC | F1 | Recall | FPR | TP | FN |")
+        out.append("|---|---|---|---|---|---|---|---|")
+        for label, entry in model_entries:
+            t = entry["test"]
+            cv_auc = entry.get("best_cv_auc")
+            out.append(
+                f"| {label} "
+                f"| {_fmt(cv_auc)} "
+                f"| {_fmt(t['AUC'])} "
+                f"| {_fmt(t['F1'])} "
+                f"| {_fmt(t.get('recall', t.get('TPR')))} "
+                f"| {_fmt(t['FPR'])} "
+                f"| {t['TP']} "
+                f"| {t['FN']} |"
+            )
+        out.append("")
+        if best_model_label:
+            best_auc = model_candidates[best_model_label]["test"]["AUC"]
+            out.append(f"Ganador: **{best_model_label}** (Test AUC = {_fmt(best_auc)})")
+            out.append("")
+        out.append(INSIGHT)
+        out.append("")
+
+    # ── 6. Resultados finales sobre test ───────────────────────────────
+    section6_label = f"## 6. Resultados finales sobre test ({best_model_label})" if best_model_label else "## 6. Resultados finales sobre test"
+    out.append(section6_label)
     out.append("")
 
     ft = final["test"]
@@ -225,8 +276,8 @@ def main() -> None:
     out.append(INSIGHT)
     out.append("")
 
-    # ── 6. Limitaciones ────────────────────────────────────────────────
-    out.append("## 6. Limitaciones")
+    # ── 7. Limitaciones ────────────────────────────────────────────────
+    out.append("## 7. Limitaciones")
     out.append("")
     out.append(INSIGHT)
     out.append("")
