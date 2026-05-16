@@ -50,7 +50,7 @@ def _fit_with_early_stopping(
     """
     X_in, X_es, y_in, y_es = train_test_split(
         X, y, test_size=0.10, random_state=random_state, stratify=y,
-    )
+    ) #Solo existe para el mecanismo de early stopping de XGBoost., no crea un set de testing.
 
     cleaner = pipeline.named_steps["cleaner"]
     tfidf = pipeline.named_steps["tfidf"]

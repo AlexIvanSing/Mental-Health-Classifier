@@ -1,47 +1,23 @@
-from xgboost import XGBClassifier
+import importlib
+
+_EXCLUDED_KEYS = frozenset({"class", "early_stopping_rounds"})
 
 
-def build_model(config: dict) -> XGBClassifier:
+def build_model(config: dict):
     """
-    Build an XGBoost classifier from a configuration dictionary.
+    Build a classifier from a configuration dictionary using dynamic import.
 
-    Reads the `model` section of the config and returns an unfitted
-    `XGBClassifier`. The first six keys are required; the other six
-    (introduced for Optuna-driven XGB tuning) fall back to sensible
-    defaults when absent, so older configs keep working unchanged.
+    Reads ``config["model"]["class"]`` (dotted path, e.g.
+    ``"xgboost.XGBClassifier"``) and instantiates it with every other key
+    in the block as a constructor argument — except ``early_stopping_rounds``,
+    which is handled by ``training.train()`` via ``set_params()``.
 
-    The `scale_pos_weight` parameter compensates for class imbalance in
-    the training set (`n_neg / n_pos` ≈ 0.93 in this corpus). The
-    `early_stopping_rounds` field is intentionally **not** consumed here
-    — it's handled by `training.train()`, which builds an inner eval
-    split and passes the rounds to `.fit()` directly.
-
-    Parameters
-    ----------
-    config : dict
-        Configuration dictionary loaded from YAML. Must contain a `model`
-        section with at least: `n_estimators`, `max_depth`, `learning_rate`,
-        `eval_metric`, `scale_pos_weight`, `random_state`. May also contain
-        the tunable knobs: `subsample`, `colsample_bytree`, `gamma`,
-        `min_child_weight`, `reg_alpha`, `reg_lambda`.
-
-    Returns
-    -------
-    xgboost.XGBClassifier
-        Unfitted classifier ready to be plugged into a Pipeline.
+    Falls back to ``xgboost.XGBClassifier`` when ``class`` is absent, so
+    older configs keep working unchanged.
     """
     m = config["model"]
-    return XGBClassifier(
-        n_estimators=m["n_estimators"],
-        max_depth=m["max_depth"],
-        learning_rate=m["learning_rate"],
-        eval_metric=m["eval_metric"],
-        scale_pos_weight=m["scale_pos_weight"],
-        random_state=m["random_state"],
-        subsample=m.get("subsample", 1.0),
-        colsample_bytree=m.get("colsample_bytree", 1.0),
-        gamma=m.get("gamma", 0.0),
-        min_child_weight=m.get("min_child_weight", 1),
-        reg_alpha=m.get("reg_alpha", 0.0),
-        reg_lambda=m.get("reg_lambda", 1.0),
-    )
+    class_path = m.get("class", "xgboost.XGBClassifier")
+    module_path, class_name = class_path.rsplit(".", 1)
+    ModelClass = getattr(importlib.import_module(module_path), class_name)
+    params = {k: v for k, v in m.items() if k not in _EXCLUDED_KEYS}
+    return ModelClass(**params)

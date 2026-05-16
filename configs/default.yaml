@@ -35,6 +35,7 @@ vectorizer:
   sublinear_tf: false
   max_features: 20000
 model:
+  class: xgboost.XGBClassifier
   n_estimators: 500
   max_depth: 6
   learning_rate: 0.05

@@ -109,3 +109,50 @@ def test_same_random_state_same_predictions(sample_config, synthetic_dataset):
     model1.fit(X, y)
     model2.fit(X, y)
     assert np.array_equal(model1.predict(X), model2.predict(X))
+
+# --- PRUEBAS importlib + backward compat ---
+
+def test_build_model_without_class_key():
+    config = {
+        "model": {
+            "n_estimators": 5,
+            "max_depth": 2,
+            "learning_rate": 0.1,
+            "eval_metric": "auc",
+            "random_state": 0,
+            "scale_pos_weight": 1.0,
+        }
+    }
+    model = build_model(config)
+    assert isinstance(model, XGBClassifier)
+
+def test_build_model_with_explicit_class_key():
+    config = {
+        "model": {
+            "class": "xgboost.XGBClassifier",
+            "n_estimators": 5,
+            "max_depth": 2,
+            "learning_rate": 0.1,
+            "eval_metric": "auc",
+            "random_state": 0,
+            "scale_pos_weight": 1.0,
+        }
+    }
+    model = build_model(config)
+    assert isinstance(model, XGBClassifier)
+
+def test_early_stopping_rounds_not_passed_to_constructor():
+    config = {
+        "model": {
+            "class": "xgboost.XGBClassifier",
+            "n_estimators": 5,
+            "max_depth": 2,
+            "learning_rate": 0.1,
+            "eval_metric": "auc",
+            "random_state": 0,
+            "scale_pos_weight": 1.0,
+            "early_stopping_rounds": 30,
+        }
+    }
+    model = build_model(config)
+    assert model.early_stopping_rounds is None

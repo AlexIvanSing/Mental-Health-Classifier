@@ -35,19 +35,13 @@ vectorizer:
   sublinear_tf: false
   max_features: 20000
 model:
-  scale_pos_weight: 0.93
+  class: xgboost.XGBClassifier
+  n_estimators: 500
+  max_depth: 6
+  learning_rate: 0.05
   eval_metric: auc
   random_state: 42
-  early_stopping_rounds: 30
-  n_estimators: 373
-  max_depth: 10
-  learning_rate: 0.010797
-  subsample: 0.6372
-  colsample_bytree: 0.7661
-  gamma: 3.2486
-  min_child_weight: 3
-  reg_alpha: 2.722e-05
-  reg_lambda: 0.00100004
+  scale_pos_weight: 0.93
 training:
   test_size: 0.2
   random_state: 42

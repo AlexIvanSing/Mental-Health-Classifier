@@ -86,6 +86,49 @@ El alcance es académico (TC3002B, Tecnológico de Monterrey) pero la estructura
    └─ training_report.md                                           comparación.
 ```
 
+### 2.1 División de datos
+
+El entrenamiento usa tres splits con propósitos distintos:
+
+```
+data_train.csv (100 %)
+│
+├── 20 % → Holdout final — apartado desde el inicio.
+│           Nunca entra en entrenamiento ni en CV.
+│           Se usa al terminar el fit para reportar el Val AUC.
+│
+└── 80 % → Conjunto de entrenamiento
+        │
+        ├── StratifiedKFold × 5 → Estima estabilidad del modelo.
+        │   Produce cv_auc_mean ± cv_auc_std.
+        │   El modelo resultante se descarta; es solo diagnóstico.
+        │
+        └── Fit final (sobre el 80 % completo)
+              │
+              └── Si early_stopping_rounds está en el YAML:
+                    ├── 90 % del 80 % (≈ 72 % del total) → entrena cleaner + tfidf + XGBoost
+                    └── 10 % del 80 % (≈  8 % del total) → eval_set: XGBoost lo observa
+                                                            para frenar árboles cuando
+                                                            el AUC deja de mejorar.
+                                                            No afecta pesos ni parámetros.
+
+data_test_fold1.csv → Test externo. Nunca se toca durante entrenamiento
+                      ni durante la búsqueda de Optuna. Solo se usa al
+                      final, vía `python -m src evaluate`, para reportar
+                      el Test AUC definitivo.
+```
+
+| Split | % del total | Propósito |
+|---|---|---|
+| KFold CV (×5 sobre el 80 %) | 80 % rotando | ¿Es el modelo estable? → `cv_auc_mean ± std` |
+| Holdout interno (20 %) | 20 % fijo | ¿Qué tan bueno quedó? → `val_auc` |
+| eval_set early stopping (10 % del 80 %) | ≈ 8 % | ¿Cuándo frenar árboles? → no reportado |
+| `data_test_fold1.csv` | dataset separado | Examen final sin contaminar |
+
+> **KFold y el holdout responden preguntas distintas.** KFold dice si el AUC es confiable o varía mucho según qué datos ve el modelo. El 20 % holdout dice cuál es ese AUC sobre datos completamente nuevos. El 8 % de early stopping no es evaluación — solo es el freno de XGBoost.
+
+---
+
 Los **tres subcomandos del CLI** (`train`, `evaluate`, `predict`) y los **dos scripts de orquestación** (`run_optimization_pipeline.py`, `run_xgb_optimization.py`) son las superficies que usarás día a día. Todo lo demás es interno.
 
 ---
@@ -98,7 +141,12 @@ Suicide_classifier/
 │   ├── default.yaml                       # Variante baseline (preprocessing.variant: "base")
 │   ├── variant_stopwords_nltk.yaml        # Stopwords NLTK (negaciones preservadas)
 │   ├── variant_stopwords_domain.yaml      # Lista curada solo de palabras gramaticales
-│   └── variant_stemming.yaml              # Porter stemmer
+│   ├── variant_stemming.yaml              # Porter stemmer
+│   └── optimized/                         # Generado por los scripts de optimización
+│       ├── base.yaml                      #   (nunca editar manualmente — los originales
+│       ├── stopwords_nltk.yaml            #    en configs/ son la fuente de verdad;
+│       ├── stopwords_domain.yaml          #    estos son copias con hiperparámetros
+│       └── stemming.yaml                  #    tuneados por Optuna)
 ├── data/
 │   ├── data_train.csv                     # Split de entrenamiento (1,516 filas)
 │   └── data_test_fold1.csv                # Fold de prueba (252 filas)
@@ -110,16 +158,14 @@ Suicide_classifier/
 │   ├── <variant>/                         # Una subcarpeta por variante después de entrenar
 │   │   ├─ roc_curve_{val,test}.png
 │   │   ├─ confusion_matrix_{val,test}.png
-│   │   ├─ {training,test}_metrics.json
-│   │   ├─ training_report.md
-│   │   └─ final_evaluation.md
+│   │   └─ {training,test}_metrics.json
 │   ├── optimization_results.json          # Resultados consolidados de Optuna (ambas etapas)
-│   ├── optimization.md                    # Reporte comparativo auto-generado (en español)
+│   ├── final_report.md                    # Reporte único consolidado (generate_final_report.py)
 │   └── optuna_xgb_<winner>.journal        # Checkpoint del estudio XGB
 ├── scripts/
 │   ├── run_optimization_pipeline.py       # Etapa 1: tuning de TF-IDF en las 4 variantes
 │   ├── run_xgb_optimization.py            # Etapa 2: tuning de XGB en la variante ganadora
-│   └── generate_optimization_report.py    # Renderiza reports/optimization.md
+│   └── generate_final_report.py           # Renderiza reports/final_report.md
 ├── src/
 │   ├── __main__.py                        # CLI: python -m src {train|evaluate|predict}
 │   ├── data_ingestion.py                  # Validación de schema, carga, manejo NA, mapeo de labels
@@ -146,7 +192,7 @@ Suicide_classifier/
 | `data_ingestion` | `ingestion`, `split_dataset`, `schema_validation`, `data_loader`, `data_mapping`, `handle_missing_data`, `concatenate_df` | Cargar CSV, validar schema, resolver nulos, concatenar columnas de texto, mapear labels, split estratificado train/test. |
 | `preprocessing` | `clean_text`, `clean_text_with_stopwords_nltk`, `clean_text_with_stopwords_domain`, `clean_text_with_stemming`, `tokenize_text`, `preprocessing` | Cleaner baseline + tres variantes. La whitelist de negaciones se respeta en todas las variantes. |
 | `vectorizer` | `build_vectorizer` | `TfidfVectorizer` configurado por YAML. |
-| `model` | `build_model` | `XGBClassifier` configurado por YAML. Soporta el espacio completo de 9 hiperparámetros (`n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`, `gamma`, `min_child_weight`, `reg_alpha`, `reg_lambda`) más `scale_pos_weight` y `eval_metric`. |
+| `model` | `build_model` | Clasificador configurado por YAML. Usa `importlib` para instanciar la clase de `config["model"]["class"]` (default: `xgboost.XGBClassifier`). Soporta los 9 hiperparámetros tuneables más `scale_pos_weight` y `eval_metric`. |
 | `pipeline` | `build_pipeline`, `CLEANERS` | Ensambla el Pipeline `cleaner → tfidf → xgboost`. El cleaner se elige del registro `CLEANERS` vía `config["preprocessing"]["variant"]`. |
 | `training` | `train`, `train_pipeline`, `main` | Split estratificado 80/20 + 5-fold Stratified CV (AUC) + fit final. **Early stopping** se activa cuando `config["model"]["early_stopping_rounds"]` está presente: re-fittea el step XGB con un eval_set interno 90/10 para que los árboles dejen de crecer cuando el AUC de validación se estanca. |
 | `inference` | `run_inference`, `run_inference_cli`, `load_pipeline`, `predict` | Predicción **ciega** (no requiere ground truth). |
@@ -261,7 +307,7 @@ pip install -e ".[dev]"
 
 Requiere Python 3.11+. Dependencias de runtime: `pandas`, `numpy`, `scikit-learn`, `xgboost`, `nltk`, `joblib`, `pyyaml`, `matplotlib`, `optuna`, `ftfy`.
 
-> **Nota Windows:** si vas a usar `optuna` con `JournalStorage` en una máquina sin permisos de administrador, puede haber problemas con el lock por symlinks (`OSError: WinError 1314`). Workaround: corre la optimización en otra máquina o como administrador.
+> **Nota Windows:** el `JournalStorage` de Optuna usa `JournalFileOpenLock` (no symlinks) para que funcione sin permisos de administrador.
 
 ### 7.2. Comandos del día a día
 
@@ -298,19 +344,18 @@ python -m src predict --input <csv> --output predictions.csv
 # Etapa 1: tuning de TF-IDF para las 4 variantes (30 trials cada una), luego
 # entrena + evalúa cada una.
 python scripts/run_optimization_pipeline.py --n-trials 30
-# → escribe los mejores hiperparams del vectorizer en cada YAML
+# → escribe configs optimizados a configs/optimized/ (originales intactos)
 # → produce reports/<variant>/* y reports/optimization_results.json
 
 # Etapa 2: tuning de XGB sobre la variante ganadora (auto-detectada del paso 1)
 python scripts/run_xgb_optimization.py --n-trials 30
-# → escribe los mejores hiperparams del modelo (incluyendo early_stopping_rounds)
-#   en el YAML de la ganadora
+# → escribe los mejores hiperparams del modelo en configs/optimized/<ganadora>.yaml
 # → checkpoint en reports/optuna_xgb_<winner>.journal
 # → agrega resultados a reports/optimization_results.json
 
-# Renderiza el reporte comparativo final (en español)
-python scripts/generate_optimization_report.py
-# → reports/optimization.md
+# Renderiza el reporte final consolidado (en español)
+python scripts/generate_final_report.py
+# → reports/final_report.md
 ```
 
 Para forzar manualmente la variante de la etapa 2 (sin auto-detección):
@@ -466,10 +511,13 @@ pytest --cov=src --cov-report=term-missing
 - [x] `optimization` etapa 1: `optimize_vectorizer` (espacio TF-IDF de 5 dims, 30 trials, 5-fold CV).
 - [x] `optimization` etapa 2: `optimize_xgb` (espacio XGB de 9 dims, 30 trials, 5-fold CV) con checkpointing en `JournalStorage` y logging de progreso por trial.
 - [x] `pick_winner_variant` para conectar etapa 1 → etapa 2 automáticamente.
-- [x] Scripts orquestadores en `scripts/`: `run_optimization_pipeline.py`, `run_xgb_optimization.py`, `generate_optimization_report.py`.
+- [x] Scripts orquestadores en `scripts/`: `run_optimization_pipeline.py`, `run_xgb_optimization.py`, `generate_final_report.py`.
 - [x] Notebook EDA con análisis de outliers honesto y justificación documentada.
-- [x] Cobertura completa de pytest sobre cada módulo (~215 tests passing).
-- [x] Reporte unificado en español: `reports/optimization.md`.
+- [x] Cobertura completa de pytest sobre cada módulo (~228 tests passing).
+- [x] Reporte final consolidado: `reports/final_report.md` (reemplaza los múltiples .md intermedios).
+- [x] `build_model` genérico vía `importlib` (`config["model"]["class"]`), con backward compat.
+- [x] Optimización escribe a `configs/optimized/` — los configs originales nunca se modifican.
+- [x] Fix del lock de Windows en `JournalStorage` (`JournalFileOpenLock`).
 
 ### Próximos pasos (corto plazo)
 
@@ -482,7 +530,6 @@ pytest --cov=src --cov-report=term-missing
 - [ ] **Splits user-disjoint**: actualmente ~14% de filas del test vienen de usuarios también presentes en train. Estratificar por `user_id` en lugar de por fila para una metodología más estricta.
 - [ ] **Reporte de coverage**: `pytest --cov=src --cov-report=term-missing`, target ≥ 80%.
 - [ ] **Documentar la procedencia del split train/test**: el script que produjo `data_train.csv` y `data_test_fold1.csv` no está commited. Wrappear `split_dataset` para que el split sea reproducible desde una fuente raw única.
-- [ ] **Fix del lock de Windows en `JournalStorage`**: cambiar a `JournalFileOpenLock` para que la optimización corra sin permisos de admin en Windows.
 
 ### Próximos pasos (stretch)
 

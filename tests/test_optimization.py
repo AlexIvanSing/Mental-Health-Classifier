@@ -97,7 +97,7 @@ def tiny_config_file(tmp_path, tiny_train_csv):
 
 # --- optimize_vectorizer --------------------------------------------------
 
-EXPECTED_RESULT_KEYS = {"variant", "best_cv_auc", "best_params", "n_trials", "all_trial_scores"}
+EXPECTED_RESULT_KEYS = {"variant", "best_cv_auc", "best_params", "n_trials", "all_trial_scores", "storage_path"}
 EXPECTED_PARAM_KEYS  = {"ngram_range", "min_df", "max_df", "sublinear_tf", "max_features"}
 
 
@@ -141,8 +141,9 @@ def test_optimize_vectorizer_cv_auc_is_in_unit_interval(tiny_config_file):
     assert 0.0 <= result["best_cv_auc"] <= 1.0
 
 
-def test_optimize_vectorizer_records_all_trial_scores(tiny_config_file):
-    result = optimize_vectorizer("base", tiny_config_file, n_trials=3)
+def test_optimize_vectorizer_records_all_trial_scores(tiny_config_file, tmp_path):
+    storage = str(tmp_path / "tfidf_scores.journal")
+    result = optimize_vectorizer("base", tiny_config_file, n_trials=3, storage_path=storage)
     assert isinstance(result["all_trial_scores"], list)
     assert len(result["all_trial_scores"]) == 3
     assert all(0.0 <= s <= 1.0 for s in result["all_trial_scores"])

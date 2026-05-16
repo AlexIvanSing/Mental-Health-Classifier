@@ -4,11 +4,12 @@ winning variant from stage 1 (TF-IDF tuning).
 
 Steps:
   1. Detect the winning variant (highest Test AUC in
-     `reports/optimization_results.json`) — unless `--variant` is given.
-  2. Run `optimize_xgb` with checkpointing to
-     `reports/optuna_xgb_<winner>.journal`.
-  3. Overwrite the `model` block of the winner's YAML with the best
-     hyperparameters + `early_stopping_rounds=30`.
+     ``reports/optimization_results.json``) — unless ``--variant`` is given.
+  2. Run ``optimize_xgb`` with checkpointing to
+     ``reports/optuna_xgb_<winner>.journal``.
+  3. Write the best hyperparameters + ``early_stopping_rounds=30`` to
+     the optimized YAML in ``configs/optimized/`` (originals are never
+     modified).
   4. Train end-to-end on the winner's variant (early stopping kicks in
      thanks to the new YAML field).
   5. Evaluate on the held-out test fold.
@@ -44,16 +45,23 @@ VARIANT_CONFIGS = {
     "stemming":         "configs/variant_stemming.yaml",
 }
 
+OPTIMIZED_CONFIGS = {
+    "base":             "configs/optimized/base.yaml",
+    "stopwords_nltk":   "configs/optimized/stopwords_nltk.yaml",
+    "stopwords_domain": "configs/optimized/stopwords_domain.yaml",
+    "stemming":         "configs/optimized/stemming.yaml",
+}
+
 CONSOLIDATED = "reports/optimization_results.json"
 DEFAULT_EARLY_STOPPING_ROUNDS = 30
 
 
-def overwrite_model_block(yaml_path: str, best_params: dict, fixed_keys: dict) -> None:
+def write_optimized_model_block(yaml_path: str, best_params: dict, fixed_keys: dict) -> None:
     """
-    Replace the `model:` block of a YAML config with Optuna's best XGB
-    hyperparameters, **merging** the fixed knobs (`scale_pos_weight`,
-    `eval_metric`, `random_state`, `early_stopping_rounds`) on top.
-    All other YAML sections are preserved verbatim.
+    Read the (already-optimized) YAML at *yaml_path*, replace its ``model``
+    block with the merged Optuna best params + fixed knobs, and write it
+    back. The original configs in ``configs/`` are never touched — this
+    function only modifies files inside ``configs/optimized/``.
     """
     cfg = load_config(yaml_path)
     cfg["model"] = {**fixed_keys, **best_params}
@@ -86,40 +94,41 @@ def main(variant: str | None, n_trials: int, resume: bool) -> None:
         winner = variant
         print(f"Variant override: {winner!r}")
 
-    yaml_path = VARIANT_CONFIGS[winner]
-    print(f"Tuning XGB for variant {winner!r} (config: {yaml_path})\n")
+    opt_path = OPTIMIZED_CONFIGS[winner]
+    print(f"Tuning XGB for variant {winner!r} (config: {opt_path})\n")
 
     # --- Step 2: Optuna ---
     storage_path = f"reports/optuna_xgb_{winner}.journal"
     optuna_result = optimize_xgb(
         winner,
-        yaml_path,
+        opt_path,
         n_trials=n_trials,
         storage_path=storage_path,
         resume=resume,
     )
 
-    # --- Step 3: overwrite the YAML's model block ---
-    print(f"\nWriting best XGB hyperparameters back to {yaml_path}")
-    base_cfg = load_config(yaml_path)
+    # --- Step 3: write best XGB params to the optimized YAML ---
+    print(f"\nWriting best XGB hyperparameters to {opt_path}")
+    base_cfg = load_config(opt_path)
     fixed_keys = {
+        "class":                 base_cfg["model"].get("class", "xgboost.XGBClassifier"),
         "scale_pos_weight":      base_cfg["model"]["scale_pos_weight"],
         "eval_metric":           base_cfg["model"]["eval_metric"],
         "random_state":          base_cfg["model"]["random_state"],
         "early_stopping_rounds": DEFAULT_EARLY_STOPPING_ROUNDS,
     }
-    overwrite_model_block(yaml_path, optuna_result["best_params"], fixed_keys)
+    write_optimized_model_block(opt_path, optuna_result["best_params"], fixed_keys)
 
     # --- Step 4 & 5: train + evaluate the tuned pipeline ---
     print(f"\nTraining and evaluating tuned pipeline ({winner})...")
-    train_metrics = train_pipeline(yaml_path)
-    cfg_after = load_config(yaml_path)
+    train_metrics = train_pipeline(opt_path)
+    cfg_after = load_config(opt_path)
     test_metrics = run_evaluation(cfg_after["data"]["test_path"], cfg_after)
 
     # --- Step 6: append to consolidated JSON ---
     final = {
         "variant":      winner,
-        "yaml_path":    yaml_path,
+        "yaml_path":    opt_path,
         "n_trials":     optuna_result["n_trials"],
         "best_cv_auc":  optuna_result["best_cv_auc"],
         "best_params":  optuna_result["best_params"],
@@ -175,7 +184,7 @@ def main(variant: str | None, n_trials: int, resume: bool) -> None:
     print(f"FPR (test):            {test_metrics['FPR']:.4f}")
     print(f"F1 (test):             {test_metrics['F1']:.4f}")
     print()
-    print(f"Best hyperparameters written to {yaml_path}")
+    print(f"Best hyperparameters written to {opt_path}")
     print(f"Consolidated results updated:   {CONSOLIDATED}")
 
 

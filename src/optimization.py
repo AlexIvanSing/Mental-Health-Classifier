@@ -33,7 +33,7 @@ import os
 from pathlib import Path
 
 import optuna
-from optuna.storages.journal import JournalFileBackend, JournalStorage
+from optuna.storages.journal import JournalFileBackend, JournalFileOpenLock, JournalStorage
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 from src.data_ingestion import ingestion
@@ -97,7 +97,9 @@ def optimize_vectorizer(
     variant: str,
     config_path: str,
     n_trials: int = 30,
-    timeout: int | None = None
+    timeout: int | None = None,
+    storage_path: str | None = None,
+    resume: bool = True,
 ) -> dict:
     """
     Run an Optuna study over TF-IDF hyperparameters for one preprocessing variant.
@@ -109,6 +111,9 @@ def optimize_vectorizer(
     inside the Pipeline (as `build_pipeline` does at deployment time) but ~5x
     faster during the search.
 
+    Uses **JournalStorage** so that a killed run resumes from the last
+    completed trial on the next call.
+
     Parameters
     ----------
     variant : str
@@ -117,6 +122,11 @@ def optimize_vectorizer(
         Path to the YAML config (used for data paths and XGB hyperparameters).
     n_trials : int, default 30
         Number of Optuna trials.
+    storage_path : str, optional
+        Path to the journal file. Defaults to
+        ``reports/optuna_tfidf_<variant>.journal``.
+    resume : bool, default True
+        If False, deletes any existing journal before starting.
 
     Returns
     -------
@@ -127,6 +137,7 @@ def optimize_vectorizer(
             "best_params":       <dict>,   # vectorizer hyperparams as YAML-friendly types
             "n_trials":          <int>,
             "all_trial_scores":  <list[float]>,
+            "storage_path":      <str>,
         }
     """
     if variant not in CLEANERS:
@@ -170,13 +181,55 @@ def optimize_vectorizer(
 
         return float(scores.mean())
 
+    # --- Journal storage (checkpointing) ---
+    if storage_path is None:
+        storage_path = f"reports/optuna_tfidf_{variant}.journal"
+    Path(storage_path).parent.mkdir(parents=True, exist_ok=True)
+
+    if not resume and os.path.exists(storage_path):
+        os.remove(storage_path)
+        print(f"  [{variant}] --no-resume: deleted existing journal at {storage_path}")
+
+    storage = JournalStorage(
+        JournalFileBackend(storage_path, lock_obj=JournalFileOpenLock(storage_path))
+    )
+    study_name = f"tfidf_{variant}"
+
     study = optuna.create_study(
+        study_name=study_name,
+        storage=storage,
+        load_if_exists=True,
         direction="maximize",
         sampler=optuna.samplers.TPESampler(
             seed=base_config["training"]["random_state"]
         ),
     )
-    study.optimize(objective, n_trials=n_trials, timeout=timeout, show_progress_bar=False)
+
+    n_already = len([t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE])
+    if n_already > 0 and resume:
+        print(f"  [{variant}] resuming study with {n_already} completed trials in journal")
+
+    # --- Progress callback ---
+    progress_state = {"trial_idx": n_already}
+
+    def _progress_cb(_study, trial):
+        progress_state["trial_idx"] += 1
+        idx = progress_state["trial_idx"]
+        total = n_already + n_trials
+        best = _study.best_value if len(_study.trials) > 0 else float("nan")
+        val = trial.value if trial.value is not None else float("nan")
+        print(
+            f"  [tfidf-{variant}] Trial {idx}/{total}  AUC={val:.4f}  best={best:.4f}",
+            flush=True,
+        )
+
+    study.optimize(
+        objective,
+        n_trials=n_trials,
+        timeout=timeout,
+        show_progress_bar=False,
+        callbacks=[_progress_cb],
+    )
 
     # Resolve the ngram_idx back to a real tuple for human consumption /
     # YAML overwrite. Everything else is already a primitive.
@@ -190,19 +243,21 @@ def optimize_vectorizer(
         "max_features": int(best_raw["max_features"]),
     }
 
-    all_scores = [t.value for t in study.trials if t.value is not None]
+    completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    all_scores = [t.value for t in completed if t.value is not None]
 
     print(
         f"[{variant}] best CV AUC = {study.best_value:.4f}  "
-        f"({n_trials} trials, params: {best_params})"
+        f"({len(completed)} completed trials in study, params: {best_params})"
     )
 
     return {
         "variant":          variant,
         "best_cv_auc":      float(round(study.best_value, 4)),
         "best_params":      best_params,
-        "n_trials":         n_trials,
+        "n_trials":         len(completed),
         "all_trial_scores": [float(round(s, 4)) for s in all_scores],
+        "storage_path":     storage_path,
     }
 
 
@@ -211,6 +266,7 @@ def run_all_optimizations(
     n_trials: int = 30,
     timeout: int | None = None,
     variants: tuple[str, ...] = VARIANTS,
+    resume: bool = True,
 ) -> dict:
     """
     Run `optimize_vectorizer` for every variant in sequence and aggregate
@@ -225,6 +281,8 @@ def run_all_optimizations(
         Number of trials per variant.
     variants : tuple of str
         Variants to optimize. Defaults to all four.
+    resume : bool, default True
+        If False, deletes any existing journals before starting.
 
     Returns
     -------
@@ -239,7 +297,9 @@ def run_all_optimizations(
     results = {}
     for v in variants:
         print(f"--- Optimizing variant: {v} ---")
-        results[v] = optimize_vectorizer(v, config_path, n_trials=n_trials, timeout=timeout)
+        results[v] = optimize_vectorizer(
+            v, config_path, n_trials=n_trials, timeout=timeout, resume=resume,
+        )
         print()
 
     print("All variants done.")
@@ -370,7 +430,9 @@ def optimize_xgb(
         os.remove(storage_path)
         print(f"  [{variant}] --no-resume: deleted existing journal at {storage_path}")
 
-    storage = JournalStorage(JournalFileBackend(storage_path))
+    storage = JournalStorage(
+        JournalFileBackend(storage_path, lock_obj=JournalFileOpenLock(storage_path))
+    )
     study_name = f"xgb_{variant}"
 
     study = optuna.create_study(
