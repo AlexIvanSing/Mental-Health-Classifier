@@ -70,7 +70,7 @@ def write_optimized_model_block(yaml_path: str, best_params: dict, fixed_keys: d
 
 
 def _to_py(o):
-    """Recursively convert numpy scalars to Python primitives."""
+    """Recursively convert numpy scalars to Python primitives.""" #para guardar en json.dump los valores
     if isinstance(o, dict):
         return {k: _to_py(v) for k, v in o.items()}
     if isinstance(o, list):

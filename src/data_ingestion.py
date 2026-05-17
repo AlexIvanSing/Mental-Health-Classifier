@@ -192,6 +192,7 @@ def ingestion(
     return df
 
 
+# codigo muerto
 def split_dataset(
     df: pd.DataFrame,
     target_column: str,

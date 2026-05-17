@@ -229,6 +229,7 @@ def train_pipeline(config_path: str) -> dict:
 
 
 def main():
+    # para llamar directo con   python src/training.py --config mi.yaml
     parser = argparse.ArgumentParser(description="Train the suicide detection pipeline.")
     parser.add_argument("--config", default="configs/default.yaml")
     args = parser.parse_args()

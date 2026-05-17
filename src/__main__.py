@@ -23,19 +23,17 @@ def main():
     args = parser.parse_args()
 
     if args.command == "train":
-        from src.training import main as training_main
-        sys.argv = ["src", "--config", args.config]
-        training_main()
+         # Cuando llamas: python main.py train --config mi.yaml
+        from src.training import train_pipeline
+        train_pipeline(config_path=args.config)
 
     elif args.command == "predict":
-        from src.inference import main as inference_main
-        sys.argv = ["src", "--input", args.input, "--output", args.output, "--config", args.config]
-        inference_main()
+        from src.inference import run_inference_cli
+        run_inference_cli(input_path=args.input,output_path=args.output,config_path=args.config)
 
     elif args.command == "evaluate":
-        from src.evaluate_cli import main as evaluate_main
-        sys.argv = ["src", "--input", args.input, "--config", args.config]
-        evaluate_main()
+        from src.evaluate_cli import run_evaluation_cli
+        run_evaluation_cli(input_path=args.input,config_path=args.config)
 
     else:
         parser.print_help()
