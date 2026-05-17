@@ -1,3 +1,12 @@
+# ============================================================================
+# Tests — Preprocesamiento de texto
+#
+# Autores:
+#   Iván Alexander Ramos Ramírez       A01750817
+#   Miguel Ángel Galicia Sánchez       A01750744
+#   Aislinn Ruiz Sandoval               A01750687
+#   Víctor Alejandro Morales García    A01749831
+# ============================================================================
 import pandas as pd
 import numpy as np
 import pytest
