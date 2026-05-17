@@ -1,11 +1,11 @@
 # ============================================================================
-# Preprocessing variants
+# Variantes de preprocesamiento de texto
 #
-# Authors (equipo del proyecto TC3002B):
-#   Aislinn Ruiz Sandoval
-#   Iván Alexander Ramos Ramírez
-#   Miguel Ángel Galicia Sánchez
-#   Víctor Alejandro Morales García
+# Autores:
+#   Iván Alexander Ramos Ramírez       A01750817
+#   Miguel Ángel Galicia Sánchez       A01750744
+#   Aislinn Ruiz Sandoval               A01750687
+#   Víctor Alejandro Morales García    A01749831
 # ============================================================================
 import re
 from functools import lru_cache

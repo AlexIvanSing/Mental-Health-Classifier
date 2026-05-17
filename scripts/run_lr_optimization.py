@@ -1,3 +1,12 @@
+# ============================================================================
+# Optimización de hiperparámetros — Regresión Logística (Stage 2-C)
+#
+# Autores:
+#   Iván Alexander Ramos Ramírez       A01750817
+#   Miguel Ángel Galicia Sánchez       A01750744
+#   Aislinn Ruiz Sandoval               A01750687
+#   Víctor Alejandro Morales García    A01749831
+# ============================================================================
 """
 Stage 2-C: tune LogisticRegression hyperparameters on the winning variant.
 
