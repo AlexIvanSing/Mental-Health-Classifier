@@ -26,7 +26,7 @@
 
 Este repositorio implementa un pipeline de machine learning end-to-end para la tarea de clasificación binaria **`is_suicide ∈ {0, 1}`** sobre texto generado por usuarios. El sistema está diseñado para ser:
 
-- **Reproducible** — todo hiperparámetro, ruta y split vive en archivos YAML bajo `configs/`. No hay números mágicos en el código.
+- **Reproducible** — todo hiperparámetro, ruta y split vive en archivos YAML bajo `configs/`.
 - **Modular** — ingesta, preprocesamiento, vectorización, modelo, evaluación, reporte y optimización son módulos independientes, cada uno con tests unitarios.
 - **Preprocesamiento configurable** — cuatro variantes de limpieza de texto intercambiables (`base`, `stopwords_nltk`, `stopwords_domain`, `stemming`) seleccionadas vía la config YAML. Cada una puede compararse A/B contra las demás.
 - **Tuning en dos etapas con Optuna** — primero los hiperparámetros del TF-IDF se tunean independientemente por variante; luego los hiperparámetros de cada modelo (XGBoost, SVM, LR) se tunean sobre la variante ganadora. Todos los estudios persisten a disco con `JournalStorage` para que un proceso interrumpido se reanude desde donde se quedó.
