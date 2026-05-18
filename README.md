@@ -216,9 +216,16 @@ LR logra el mejor Test AUC (0.7721) y SVM el mejor Recall (0.7538). XGBoost qued
 - [ ] **`reports/algorithm_justification.md`** — por qué TF-IDF + modelos clásicos en lugar de deep learning, con referencias.
 - [ ] **Documentar la procedencia del split train/test**: wrappear `split_dataset` para que sea reproducible desde fuente raw.
 
+
+### IDEAS FUTURAS
+
 ### Próximos pasos (stretch)
 
 - [ ] **`TruncatedSVD` post-TF-IDF** — si la matriz sparse se vuelve cuello de botella.
 - [ ] **Variantes combinadas**: e.g., `stemming + stopwords_domain`.
 - [ ] **Pruning durante CV**: reportar AUCs por-fold para que Optuna pode trials no-prometedores.
 - [ ] **Joint search TF-IDF + modelo** vía hierarchical search.
+
+
+
+- [ ] Creación de Atomatizacion de EDA segun el tipo de dato y el esquema de los datos + objetivo. Analizando el impacto del uso de diferentes LLMs u otro tipo de herramientas 
