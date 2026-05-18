@@ -280,7 +280,7 @@ def clean_text_with_stopwords_domain(text: str) -> str:
     they would be on a standard stopword list — because they are precisely
     the discriminative signal in this domain.
 
-    Authors (equipo del proyecto TC3002B):
+    Authors:
         Aislinn Ruiz Sandoval, Iván Alexander Ramos Ramírez,
         Miguel Ángel Galicia Sánchez, Víctor Alejandro Morales García.
 
